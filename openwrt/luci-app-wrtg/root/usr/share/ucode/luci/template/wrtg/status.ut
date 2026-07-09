@@ -1,0 +1,189 @@
+{#
+ wrtg status dashboard (ucode template, no Lua)
+-#}
+
+{%
+import { readfile, popen } from 'fs';
+
+function sh(cmd) {
+	let p = popen(cmd, 'r');
+	if (!p) return '';
+	let out = p.read('all') ?? '';
+	p.close();
+	return trim(out);
+}
+
+function cfg_val(cfg, key) {
+	if (!cfg) return '';
+	let pfx = key + '=';
+	for (let line in split(cfg, /\n/)) {
+		line = trim(line);
+		if (substr(line, 0, length(pfx)) == pfx) {
+			let v = trim(substr(line, length(pfx)));
+			return trim(replace(v, /"/g, ''));
+		}
+	}
+	return '';
+}
+
+let version = trim(readfile('/etc/wrtg/version') ?? '');
+let pid = sh('pidof wrtg 2>/dev/null');
+let running = length(pid) > 0;
+
+let cfg = readfile('/etc/wrtg/config') ?? '';
+let front_ip = cfg_val(cfg, 'FRONT_IP') || '149.154.167.220';
+let front_dcs = cfg_val(cfg, 'WRTG_FRONT_DCS') || '2,4';
+let cf_worker = cfg_val(cfg, 'CF_WORKER_DOMAIN');
+let listen = cfg_val(cfg, 'LISTEN') || '0.0.0.0:8443';
+
+// nftables DNAT presence
+let nft = sh("nft list table inet tg_tproxy 2>/dev/null | grep -c 'dnat ip to'");
+let dnat_ok = int(nft) > 0;
+
+// CIDR count
+let cidr_n = sh("grep -cE '^[0-9]' /var/lib/wrtg/cidrs.txt 2>/dev/null");
+
+// Per-DC health from recent logs: last outcome per DC.
+let loglines = sh("logread -e wrtg 2>/dev/null | tail -n 400");
+let dc_state = {};
+for (let d in [1, 2, 3, 4, 5]) dc_state[d] = { how: '', ts: '' };
+for (let line in split(loglines, /\n/)) {
+	let m = match(line, /DC([1-5]).*WS connected via (CF worker[^\n(]*|pool|[a-z0-9.-]+web\.telegram\.org)/);
+	if (m) { dc_state[int(m[1])].how = match(line, /CF worker/) ? 'CF worker' : 'direct WS'; continue; }
+	m = match(line, /DC([1-5]).* TCP fallback to/);
+	if (m) { dc_state[int(m[1])].how = 'TCP fallback'; continue; }
+	m = match(line, /DC([1-5]).*(blacklist|302|WS skipped)/);
+	if (m && !length(dc_state[int(m[1])].how)) { dc_state[int(m[1])].how = '302/blacklist'; }
+}
+
+// counts in the window
+let n_worker = length(split(loglines, 'via CF worker')) - 1;
+let n_ws = 0; for (let l in split(loglines, /\n/)) if (match(l, /WS connected via kws/)) n_ws++;
+let n_pass = 0; for (let l in split(loglines, /\n/)) if (match(l, /passthrough ->/)) n_pass++;
+let n_wpass = 0; for (let l in split(loglines, /\n/)) if (match(l, /passthrough via CF worker/)) n_wpass++;
+
+// dc_learn: admin + learned IP→DC maps
+let learn_raw = readfile('/etc/wrtg/dc-ips-learned.txt') ?? '';
+let learn_lines = [];
+for (let line in split(learn_raw, /\n/)) {
+	line = trim(line);
+	if (length(line) && substr(line, 0, 1) != '#') push(learn_lines, line);
+}
+let learn_n = length(learn_lines);
+let learn_preview = [];
+let li = 0;
+for (let line in learn_lines) {
+	if (li >= 5) break;
+	push(learn_preview, line);
+	li++;
+}
+let manual_exists = length(readfile('/etc/wrtg/dc-ips.txt') ?? '') > 0 || sh('[ -f /etc/wrtg/dc-ips.txt ] && echo 1') == '1';
+
+let base = dispatcher.build_url('admin', 'services', 'wrtg', 'action');
+let self = dispatcher.build_url('admin', 'services', 'wrtg', 'status');
+
+function badge(ok, yes, no) {
+	return sprintf('<span style="display:inline-block;padding:2px 10px;border-radius:10px;font-weight:600;color:#fff;background:%s">%s</span>',
+		ok ? '#2e7d32' : '#c62828', ok ? yes : no);
+}
+%}
+
+{% include('header') %}
+
+<style>
+.wrtg-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin:12px 0; }
+.wrtg-card { background:var(--background-color-high,#2b2b2b); border:1px solid var(--border-color-medium,#444); border-radius:8px; padding:14px 16px; }
+.wrtg-card h4 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; opacity:.7; }
+.wrtg-card .big { font-size:20px; font-weight:700; }
+.wrtg-kv { margin:3px 0; font-size:13px; }
+.wrtg-kv b { display:inline-block; min-width:120px; opacity:.75; font-weight:500; }
+.wrtg-dc { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.wrtg-pill { padding:4px 10px; border-radius:6px; font-size:13px; font-weight:600; border:1px solid var(--border-color-medium,#444); }
+.wrtg-actions a { margin-right:8px; }
+.g { color:#66bb6a; } .r { color:#ef5350; } .y { color:#ffa726; }
+</style>
+
+<h2>{{ _('wrtg — Telegram proxy') }}</h2>
+
+<div class="wrtg-grid">
+	<div class="wrtg-card">
+		<h4>{{ _('Service') }}</h4>
+		<p class="big">{{ badge(running, _('running'), _('stopped')) }}</p>
+		<div class="wrtg-kv"><b>{{ _('Version') }}</b> {{ length(version) ? version : '?' }}</div>
+		<div class="wrtg-kv"><b>PID</b> {{ length(pid) ? pid : '—' }}</div>
+		<div class="wrtg-kv"><b>{{ _('Listen') }}</b> {{ listen }}</div>
+	</div>
+
+	<div class="wrtg-card">
+		<h4>{{ _('Routing') }}</h4>
+		<div class="wrtg-kv"><b>FRONT_IP</b> {{ front_ip }}</div>
+		<div class="wrtg-kv"><b>WRTG_FRONT_DCS</b> {{ front_dcs }}</div>
+		<div class="wrtg-kv"><b>DNAT</b> {{ badge(dnat_ok, _('loaded'), _('missing')) }}</div>
+		<div class="wrtg-kv"><b>{{ _('CIDR nets') }}</b> {{ length(cidr_n) ? cidr_n : '0' }}</div>
+	</div>
+
+	<div class="wrtg-card">
+		<h4>{{ _('CF Worker') }}</h4>
+		<p class="big">{{ badge(length(cf_worker) > 0, _('configured'), _('not set')) }}</p>
+		{% if (length(cf_worker)) { %}
+			<div class="wrtg-kv" style="word-break:break-all">{{ cf_worker }}</div>
+		{% } else { %}
+			<div class="wrtg-kv y">{{ _('DC1/3/5 need a Worker — see Documentation → CF Worker Setup') }}</div>
+		{% } %}
+	</div>
+
+	<div class="wrtg-card">
+		<h4>{{ _('Recent activity (last 400 log lines)') }}</h4>
+		<div class="wrtg-kv"><b>{{ _('via CF worker') }}</b> <span class="g">{{ n_worker }}</span></div>
+		<div class="wrtg-kv"><b>{{ _('direct WS') }}</b> <span class="g">{{ n_ws }}</span></div>
+		<div class="wrtg-kv"><b>{{ _('worker passthrough') }}</b> <span class="g">{{ n_wpass }}</span></div>
+		<div class="wrtg-kv"><b>{{ _('front passthrough') }}</b> <span class="y">{{ n_pass }}</span></div>
+	</div>
+</div>
+
+<div class="wrtg-card" style="margin:12px 0">
+	<h4>{{ _('DC learn (IP → DC)') }}</h4>
+	<div class="wrtg-kv"><b>{{ _('Learned mappings') }}</b> {{ learn_n }}</div>
+	<div class="wrtg-kv"><b>/etc/wrtg/dc-ips.txt</b> {{ manual_exists ? _('present') : _('missing') }}</div>
+	{% if (learn_n > 0) { %}
+		<pre style="margin:8px 0 0;font-size:12px;max-height:8em;overflow:auto;opacity:.85">{%
+			for (let line in learn_preview) { %}{{ line }}
+{% } %}{% if (learn_n > 5) { %}… (+{{ learn_n - 5 }})
+{% } %}</pre>
+	{% } else { %}
+		<p style="font-size:12px;opacity:.65;margin:6px 0 0">{{ _('No learned entries yet. Hand-edit /etc/wrtg/dc-ips.txt (IP DC [media]) or wait for clients that embed the DC in the handshake.') }}</p>
+	{% } %}
+	<p style="font-size:12px;opacity:.6;margin-top:8px">{{ _('Learned file: /etc/wrtg/dc-ips-learned.txt · Admin file: /etc/wrtg/dc-ips.txt · Env: WRTG_DC_LEARN_FILE / WRTG_DC_IPS_FILE') }}</p>
+</div>
+
+<div class="wrtg-card" style="margin:12px 0">
+	<h4>{{ _('Per-DC last outcome') }}</h4>
+	<div class="wrtg-dc">
+	{% for (let d in [1,2,3,4,5]) {
+		let how = dc_state[d].how;
+		let cls = (how == 'direct WS' || how == 'CF worker') ? 'g' : (how == '302/blacklist' ? 'r' : (length(how) ? 'y' : ''));
+	%}
+		<span class="wrtg-pill">DC{{ d }}: <span class="{{ cls }}">{{ length(how) ? how : _('idle') }}</span></span>
+	{% } %}
+	</div>
+	<p style="font-size:12px;opacity:.6;margin-top:8px">{{ _('DC2/DC4 → front · DC1/3/5 → CF worker (real IP). "302/blacklist" means that DC needs a Worker.') }}</p>
+</div>
+
+<div class="cbi-section wrtg-actions">
+	<a class="cbi-button cbi-button-apply" href="{{ base }}?act=restart">{{ _('Restart') }}</a>
+	<a class="cbi-button cbi-button-action" href="{{ base }}?act=reload">{{ _('Reload config') }}</a>
+	{% if (running) { %}<a class="cbi-button cbi-button-reset" href="{{ base }}?act=stop">{{ _('Stop') }}</a>
+	{% } else { %}<a class="cbi-button cbi-button-save" href="{{ base }}?act=start">{{ _('Start') }}</a>{% } %}
+	<a class="cbi-button" href="{{ self }}">{{ _('Refresh') }}</a>
+	<label style="margin-left:12px;font-size:13px"><input type="checkbox" id="wrtg-auto"> {{ _('auto-refresh 5s') }}</label>
+</div>
+
+<script>
+(function(){
+	var k='wrtg-auto', cb=document.getElementById('wrtg-auto'), t=null;
+	function apply(){ if(cb.checked){ t=setTimeout(function(){location.reload();},5000); localStorage.setItem(k,'1'); } else { if(t)clearTimeout(t); localStorage.removeItem(k); } }
+	cb.checked = localStorage.getItem(k)==='1'; cb.addEventListener('change',apply); apply();
+})();
+</script>
+
+{% include('footer') %}

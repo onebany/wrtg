@@ -1,0 +1,82 @@
+#!/bin/sh /etc/rc.common
+START=95
+STOP=15
+USE_PROCD=1
+
+BIN=/usr/sbin/wrtg
+CONF=/etc/wrtg/config
+
+. /etc/wrtg/lib.sh
+
+start_service() {
+	load_config
+	[ -x "$BIN" ] || {
+		echo "wrtg binary missing: $BIN" >&2
+		return 1
+	}
+
+	/etc/wrtg/setup-nft.sh
+
+	procd_open_instance
+	procd_set_param command "$BIN" -listen "$LISTEN" -front-ip "$FRONT_IP"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+
+	# IMPORTANT: each `procd_set_param env` *replaces* the previous env list.
+	# Use one `procd_set_param env` then `procd_append_param env` for the rest,
+	# otherwise only the last variable (e.g. WRTG_CF_WORKER_POOL_SIZE) survives
+	# and CF_WORKER_DOMAIN / FRONT_IP never reach the daemon → cf-workers=0.
+	#
+	# FRONT_IP is also exported as env: -front-ip is startup-only CLI, but SIGHUP
+	# reload re-reads env — without this a custom FRONT_IP reverts to default.
+	_env_set=0
+	_add_env() {
+		[ -n "$2" ] || return 0
+		if [ "$_env_set" = "0" ]; then
+			procd_set_param env "$1=$2"
+			_env_set=1
+		else
+			procd_append_param env "$1=$2"
+		fi
+	}
+	_add_env FRONT_IP "$FRONT_IP"
+	_add_env WRTG_FRONT_DCS "$WRTG_FRONT_DCS"
+	_add_env CF_WORKER_DOMAIN "$CF_WORKER_DOMAIN"
+	_add_env CF_PROXY_DOMAIN "$CF_PROXY_DOMAIN"
+	_add_env WRTG_CFPROXY_AUTO "$WRTG_CFPROXY_AUTO"
+	_add_env WRTG_DC_IPS "$WRTG_DC_IPS"
+	_add_env WRTG_DC_LEARN_FILE "$WRTG_DC_LEARN_FILE"
+	_add_env WRTG_DC_IPS_FILE "$WRTG_DC_IPS_FILE"
+	_add_env WRTG_NO_CFPROXY "$WRTG_NO_CFPROXY"
+	_add_env WRTG_NO_WORKER_PASSTHROUGH "$WRTG_NO_WORKER_PASSTHROUGH"
+	_add_env WRTG_IP_FAIL_COOLDOWN_SEC "$WRTG_IP_FAIL_COOLDOWN_SEC"
+	_add_env WRTG_WS_POOL_SIZE "$WRTG_WS_POOL_SIZE"
+	_add_env WRTG_WS_POOL_TTL_SEC "$WRTG_WS_POOL_TTL_SEC"
+	_add_env WRTG_CF_WORKER_POOL_SIZE "$WRTG_CF_WORKER_POOL_SIZE"
+	_add_env WRTG_CF_WORKER_POOL_TTL_SEC "$WRTG_CF_WORKER_POOL_TTL_SEC"
+	_add_env WRTG_WS_BLACKLIST_TTL_SEC "$WRTG_WS_BLACKLIST_TTL_SEC"
+
+	for dc in 1 2 3 4 5 203; do
+		eval "dc_ip=\$DC${dc}_FRONT_IP"
+		_add_env "DC${dc}_FRONT_IP" "$dc_ip"
+	done
+
+	procd_close_instance
+}
+
+stop_service() {
+	nft delete table inet tg_tproxy 2>/dev/null || true
+}
+
+reload_service() {
+	if pid=$(pidof wrtg 2>/dev/null); then
+		kill -HUP "$pid" 2>/dev/null && echo "wrtg config reloaded (SIGHUP)" || true
+	else
+		echo "wrtg not running" >&2
+	fi
+}
+
+service_triggers() {
+	procd_add_reload_trigger "wrtg"
+}

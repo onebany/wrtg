@@ -1,0 +1,99 @@
+# wrtg configuration — /etc/wrtg/config
+#
+# Apply changes:
+#   /etc/init.d/wrtg reload    # SIGHUP — re-reads FRONT_IP, CF domains, per-DC IPs
+#   /etc/init.d/wrtg restart   # full restart — REQUIRED for pool sizes/TTLs,
+#                              # cooldown/blacklist TTLs, LISTEN, and any newly
+#                              # added variable (procd sets env at start only)
+#   /etc/wrtg/update-cidr.sh   # refresh Telegram CIDR + nft only
+#
+# Windows-edited configs (CRLF) are handled automatically.
+
+# ── Core ────────────────────────────────────────────────────────────────────
+
+# Router LAN IP (DNAT target). Auto-detected on install if empty.
+ROUTER_IP=""
+
+# LAN interface facing clients (Telegram devices).
+LAN_IF="eth0"
+
+# wrtg listen address (must match DNAT port). Restart to apply.
+LISTEN="0.0.0.0:8443"
+
+# Global front IP for WS bridge, TCP fallback, and web.telegram.org TLS passthrough.
+FRONT_IP="149.154.167.220"
+
+# Which DCs the global FRONT_IP applies to. The stock front only fronts DC2/DC4
+# (DC1/3/5 get HTTP 302), so others default to their real IP (direct / CF worker).
+#   "2,4"  (default) — front DC2/DC4, rest direct
+#   "all"           — front every DC (heavily-blocked networks)
+#   "none"          — never front (fully-open networks / custom per-DC only)
+# Restart to apply.
+# WRTG_FRONT_DCS="2,4"
+
+# Per-DC front IP overrides (optional; always win over WRTG_FRONT_DCS). Example:
+# DC1_FRONT_IP="149.154.167.220"
+# DC2_FRONT_IP="149.154.167.51"
+# WRTG_DC_IPS="1:149.154.167.220,2:149.154.167.51"
+
+# IP → DC mapping (self-learning). Clients that embed the DC in the handshake
+# teach wrtg which DC each Telegram IP belongs to; connections that don't embed
+# it are then resolved to the fast front instead of a slow blind passthrough.
+# Learned entries persist here (append-only) and are reloaded on restart:
+#   /etc/wrtg/dc-ips-learned.txt      (override: WRTG_DC_LEARN_FILE)
+# You can also hand-add entries in an admin file loaded at startup:
+#   /etc/wrtg/dc-ips.txt              (override: WRTG_DC_IPS_FILE)
+# Format, one per line ("# comments" ok):  <IP> <DC> [media]
+#   149.154.167.35 2
+#   149.154.171.255 5 media
+
+# ── Cloudflare fallback (DC1/DC3/DC5 HTTP 302 + DC5 emoji CDN) ───────────────
+
+# Cloudflare Worker domain(s) for WS fallback (comma-separated).
+# Native wrtg solution — no zapret required. Restart to apply.
+# Setup guide: docs/CF_WORKER_SETUP.md  |  template: openwrt/config.cfworker.template
+# CF_WORKER_DOMAIN="your-worker.username.workers.dev"
+
+# Cloudflare-proxied domain(s) for WS fallback (comma-separated).
+# If unset, wrtg auto-fetches the shared pool from Flowseal/tg-ws-proxy (hourly).
+# Community pool domains may be dead/blocked — prefer CF_WORKER_DOMAIN or your own domain.
+# CF_PROXY_DOMAIN="your-domain.example.com"
+
+# Auto-fetch shared CF Proxy domain pool (default on when CF_PROXY_DOMAIN is empty).
+# WRTG_CFPROXY_AUTO="0"
+
+# Disable CF Worker/Proxy fallback entirely.
+# WRTG_NO_CFPROXY="1"
+
+# Disable tunneling passthrough (TLS / MTProto-over-HTTP media) through the CF Worker.
+# On by default when CF_WORKER_DOMAIN is set; needed for emoji/stickers on blocked
+# networks. Set to 1 to keep passthrough on the front IP instead.
+# WRTG_NO_WORKER_PASSTHROUGH="1"
+
+# ── Tuning (uncomment to override; restart to apply) ─────────────────────────
+
+# Direct WS connection pool, per (DC, media). Warmup runs when FRONT_IP is set.
+# WRTG_WS_POOL_SIZE="2"              # default 2, max 8
+# WRTG_WS_POOL_TTL_SEC="120"         # pool connection TTL (seconds)
+
+# CF Worker connection pool (only used when CF_WORKER_DOMAIN is set).
+# WRTG_CF_WORKER_POOL_SIZE="2"       # default 2, max 4
+# WRTG_CF_WORKER_POOL_TTL_SEC="120"  # pool connection TTL (seconds)
+
+# Per-DC WS blacklist TTL after all domains return HTTP 302 (seconds).
+# WRTG_WS_BLACKLIST_TTL_SEC="2700"   # default 2700 (45 min)
+
+# Cooldown after WS connect timeout to FRONT_IP (skip direct WS, seconds).
+# WRTG_IP_FAIL_COOLDOWN_SEC="3600"   # default 3600 (1 hour)
+
+# Alternative front IP env names (CLI --front-ip takes precedence over all):
+# WRTG_FRONT_IP="149.154.167.220"
+# TG_TPROXY_FRONT_IP="149.154.167.220"
+
+# ── CIDR refresh ─────────────────────────────────────────────────────────────
+
+# Official Telegram CIDR list URL.
+CIDR_URL="https://core.telegram.org/resources/cidr.txt"
+
+# Daily CIDR refresh hour (0-23, router local time).
+CIDR_UPDATE_HOUR="4"

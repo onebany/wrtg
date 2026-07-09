@@ -1,0 +1,57 @@
+{
+	"admin/services/wrtg": {
+		"title": "wrtg",
+		"order": 60,
+		"action": {
+			"type": "alias",
+			"path": "admin/services/wrtg/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-wrtg" ],
+			"fs": { "/etc/wrtg/config": "file" }
+		}
+	},
+
+	"admin/services/wrtg/status": {
+		"title": "Status",
+		"order": 10,
+		"action": {
+			"type": "template",
+			"path": "wrtg/status"
+		}
+	},
+
+	"admin/services/wrtg/config": {
+		"title": "Settings",
+		"order": 20,
+		"action": {
+			"type": "template",
+			"path": "wrtg/config"
+		}
+	},
+
+	"admin/services/wrtg/logs": {
+		"title": "Logs",
+		"order": 30,
+		"action": {
+			"type": "template",
+			"path": "wrtg/logs"
+		}
+	},
+
+	"admin/services/wrtg/docs": {
+		"title": "Documentation",
+		"order": 40,
+		"action": {
+			"type": "template",
+			"path": "wrtg/docs"
+		}
+	},
+
+	"admin/services/wrtg/action": {
+		"action": {
+			"type": "template",
+			"path": "wrtg/action"
+		}
+	}
+}

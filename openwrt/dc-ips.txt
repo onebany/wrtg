@@ -1,0 +1,6 @@
+# Admin IP -> DC map (loaded at startup). Format: <IP> <DC> [media]
+# Learned mappings also persist to /etc/wrtg/dc-ips-learned.txt.
+# Override paths: WRTG_DC_IPS_FILE / WRTG_DC_LEARN_FILE
+#
+# Android / Pixel often omit DC in the obfuscated handshake — seed known IPs here.
+149.154.167.35 2

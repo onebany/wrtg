@@ -1,0 +1,64 @@
+{#
+ wrtg log viewer — filter, highlight, auto-refresh
+-#}
+
+{%
+import { popen } from 'fs';
+
+let q = http.formvalue('q') ?? '';
+let n = http.formvalue('n') ?? '120';
+if (!match(n, /^[0-9]+$/)) n = '120';
+if (int(n) > 500) n = '500';
+
+// Sanitize filter for shell (allow only safe chars).
+let qs = replace(q, /[^A-Za-z0-9 ._:>/-]/g, '');
+let cmd = 'logread -e wrtg 2>/dev/null';
+if (length(qs)) cmd += " | grep -F " + '"' + qs + '"';
+cmd += ' | tail -n ' + n;
+
+let p = popen(cmd, 'r');
+let logs = p ? (p.read('all') ?? '') : '';
+if (p) p.close();
+
+let url = dispatcher.build_url('admin', 'services', 'wrtg', 'logs');
+%}
+
+{% include('header') %}
+
+<h2>{{ _('wrtg Logs') }}</h2>
+
+<div class="cbi-section">
+	<form method="get" action="{{ url }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+		<input type="text" name="q" value="{{ q }}" placeholder="{{ _('filter (e.g. DC1, CF worker, 302)') }}" style="width:24em" />
+		<select name="n">
+			{% for (let opt in ['80','120','200','300','500']) { %}
+			<option value="{{ opt }}" {{ n == opt ? 'selected' : '' }}>{{ opt }} {{ _('lines') }}</option>
+			{% } %}
+		</select>
+		<input class="cbi-button cbi-button-action" type="submit" value="{{ _('Apply') }}" />
+		<a class="cbi-button" href="{{ url }}">{{ _('Clear') }}</a>
+		<label style="font-size:13px"><input type="checkbox" id="wrtg-logauto"> {{ _('auto 5s') }}</label>
+	</form>
+</div>
+
+<pre id="wrtg-log" style="white-space:pre-wrap;font-size:12px;line-height:1.4;max-height:70vh;overflow:auto;padding:10px;background:var(--background-color-high,#1e1e1e);border:1px solid var(--border-color-medium,#444);border-radius:6px">{{ entityencode(logs) }}</pre>
+
+<script>
+(function(){
+	var pre=document.getElementById('wrtg-log');
+	// colourise
+	var html=pre.innerHTML.split('\n').map(function(l){
+		if(/via CF worker|direct handshake OK|WS connected/.test(l)) return '<span style="color:#66bb6a">'+l+'</span>';
+		if(/302|blacklist|failed|timeout|unhealthy|all bridge paths/.test(l)) return '<span style="color:#ef5350">'+l+'</span>';
+		if(/passthrough|TCP fallback|skipped/.test(l)) return '<span style="color:#ffa726">'+l+'</span>';
+		return l;
+	}).join('\n');
+	pre.innerHTML=html; pre.scrollTop=pre.scrollHeight;
+	var k='wrtg-logauto', cb=document.getElementById('wrtg-logauto');
+	cb.checked=localStorage.getItem(k)==='1';
+	function apply(){ if(cb.checked){localStorage.setItem(k,'1'); setTimeout(function(){location.reload();},5000);} else localStorage.removeItem(k); }
+	cb.addEventListener('change',apply); apply();
+})();
+</script>
+
+{% include('footer') %}

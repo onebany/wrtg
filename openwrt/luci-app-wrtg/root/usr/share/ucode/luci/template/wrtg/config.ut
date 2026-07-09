@@ -1,0 +1,142 @@
+{#
+ wrtg settings — quick-set common keys + raw editor (/etc/wrtg/config)
+-#}
+
+{%
+import { readfile, writefile } from 'fs';
+
+let cfg_path = '/etc/wrtg/config';
+let msg = '';
+
+function set_key(text, key, val) {
+	let pfx = key + '=';
+	let has = false, out = [];
+	for (let line in split(text, /\n/)) {
+		if (substr(trim(line), 0, length(pfx)) == pfx) { out[length(out)] = key + '="' + val + '"'; has = true; }
+		else out[length(out)] = line;
+	}
+	let joined = join('\n', out);
+	if (!has) joined = trim(joined) + '\n' + key + '="' + val + '"\n';
+	return joined;
+}
+
+function cfg_val(text, key) {
+	let pfx = key + '=';
+	for (let line in split(text ?? '', /\n/)) {
+		line = trim(line);
+		if (substr(line, 0, length(pfx)) == pfx) {
+			let v = trim(substr(line, length(pfx)));
+			return trim(replace(v, /"/g, ''));
+		}
+	}
+	return '';
+}
+
+if (http.getenv('REQUEST_METHOD') == 'POST') {
+	let form = http.formvalue('_form');
+	if (form == 'quick') {
+		let text = readfile(cfg_path) ?? '';
+		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'CF_PROXY_DOMAIN']) {
+			let v = http.formvalue(k);
+			if (v != null) text = set_key(text, k, trim(v));
+		}
+		writefile(cfg_path, text);
+		msg = _('Saved. Restart wrtg to apply pools/scope changes.');
+	} else if (form == 'raw') {
+		let data = http.formvalue('_cfg');
+		if (data != null) { writefile(cfg_path, data); msg = _('Raw config saved.'); }
+	}
+	if (http.formvalue('_restart') == '1') {
+		system('/etc/init.d/wrtg restart >/dev/null 2>&1');
+		msg += ' ' + _('Service restarted.');
+	}
+}
+
+let cfg = readfile(cfg_path) ?? '';
+let cur_worker = cfg_val(cfg, 'CF_WORKER_DOMAIN');
+let url = dispatcher.build_url('admin', 'services', 'wrtg', 'config');
+let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc=CF_WORKER_SETUP';
+%}
+
+{% include('header') %}
+
+<h2>{{ _('wrtg Settings') }}</h2>
+
+{% if (length(msg)) { %}<div class="alert-message success">{{ msg }}</div>{% } %}
+
+<div class="cbi-section" style="border:1px solid var(--border-color-medium,#4a4a4a);border-radius:8px;padding:14px 16px;margin-bottom:14px">
+	<h3 style="margin-top:0">Cloudflare Worker
+		{% if (length(cur_worker)) { %}<span style="color:#2e7d32;font-size:13px">● настроен</span>
+		{% } else { %}<span style="color:#e08e0b;font-size:13px">● не задан</span>{% } %}
+	</h3>
+	<p style="margin:.2em 0 .8em">Бесплатный Cloudflare Worker включает <b>DC1/DC3/DC5, стикеры и анимированные emoji</b>. У каждого роутера — свой Worker; вставьте его адрес ниже.</p>
+
+	<details style="margin-bottom:.8em">
+		<summary style="cursor:pointer;font-weight:600">Как создать свой Worker (5 минут)</summary>
+		<ol style="margin:.6em 0 .2em 1.2em;line-height:1.7">
+			<li>Зарегистрируйтесь (бесплатно) на <code>dash.cloudflare.com</code>.</li>
+			<li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Hello World</b> → <b>Deploy</b>.</li>
+			<li>Откройте <b>Edit code</b>, замените весь шаблон на код Worker для wrtg и нажмите <b>Deploy</b>.
+				Код и полная инструкция: <a href="{{ docs_url }}">Documentation → CF Worker Setup</a>.</li>
+			<li>Скопируйте адрес вида <code>name.username.workers.dev</code> и вставьте в поле ниже.</li>
+			<li>Нажмите <b>Save &amp; Restart</b>. В логах появится <code>WS connected via CF worker</code>.</li>
+		</ol>
+		<p style="margin:.4em 0 0"><small>Проверка: <code>curl -i https://ВАШ-worker.workers.dev/apiws</code> → должен вернуть <code>426 Expected websocket</code>.</small></p>
+	</details>
+
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="cbi-value">
+			<label class="cbi-value-title">CF_WORKER_DOMAIN</label>
+			<div class="cbi-value-field"><input type="text" name="CF_WORKER_DOMAIN" value="{{ cur_worker }}" placeholder="name.username.workers.dev" style="width:30em" />
+				<div class="cbi-value-description">Адрес вашего Worker (через запятую — несколько). Пусто = без Worker.</div></div>
+		</div>
+		<div class="cbi-page-actions">
+			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">Save &amp; Restart</button>
+		</div>
+	</form>
+</div>
+
+<div class="cbi-section">
+	<h3>{{ _('Quick settings') }}</h3>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="cbi-value">
+			<label class="cbi-value-title">FRONT_IP</label>
+			<div class="cbi-value-field"><input type="text" name="FRONT_IP" value="{{ cfg_val(cfg, 'FRONT_IP') }}" style="width:22em" />
+				<div class="cbi-value-description">{{ _('Reachable Telegram front (default 149.154.167.220).') }}</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">WRTG_FRONT_DCS</label>
+			<div class="cbi-value-field"><input type="text" name="WRTG_FRONT_DCS" value="{{ cfg_val(cfg, 'WRTG_FRONT_DCS') }}" placeholder="2,4" style="width:22em" />
+				<div class="cbi-value-description">{{ _('DCs to send via FRONT_IP: 2,4 (default) · all · none · list. Others go to real IP / CF worker.') }}</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">CF_PROXY_DOMAIN</label>
+			<div class="cbi-value-field"><input type="text" name="CF_PROXY_DOMAIN" value="{{ cfg_val(cfg, 'CF_PROXY_DOMAIN') }}" style="width:30em" />
+				<div class="cbi-value-description">{{ _('Optional CF-proxied domain(s). Empty → auto-pool from GitHub.') }}</div></div>
+		</div>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
+		</div>
+	</form>
+</div>
+
+<div class="cbi-section">
+	<h3>{{ _('Raw config') }} <small style="opacity:.6">/etc/wrtg/config</small></h3>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="raw" />
+		<textarea name="_cfg" rows="18" style="width:100%;font-family:monospace;font-size:12px">{{ cfg }}</textarea>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save raw') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
+		</div>
+	</form>
+	<p style="font-size:12px;opacity:.6">{{ _('Pools/TTL, LISTEN and new variables need a restart (not reload).') }}</p>
+</div>
+
+{% include('footer') %}

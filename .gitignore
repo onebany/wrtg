@@ -1,0 +1,18 @@
+# Rust build artifacts
+target/
+dist/
+
+# Captures / debug
+*.pcap
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+.cursor/AI_CONTEXT.md
+*.swp
+*.swo

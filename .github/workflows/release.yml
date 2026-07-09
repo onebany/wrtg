@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test -p wrtg
+
+  build:
+    name: build ${{ matrix.out }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            out: wrtg-linux-amd64
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            out: wrtg-linux-arm64
+          - arch: arm
+            target: armv7-unknown-linux-musleabihf
+            out: wrtg-linux-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check VERSION matches tag
+        run: |
+          TAG_VER="${GITHUB_REF#refs/tags/v}"
+          FILE_VER="$(cat VERSION)"
+          if [ "$TAG_VER" != "$FILE_VER" ]; then
+            echo "VERSION file ($FILE_VER) does not match tag ($TAG_VER)" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build static binary (musl)
+        run: |
+          mkdir -p dist
+          cargo zigbuild --release -p wrtg --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/wrtg" "dist/${{ matrix.out }}"
+          chmod +x "dist/${{ matrix.out }}"
+          file "dist/${{ matrix.out }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build OpenWrt install bundle
+        run: |
+          # Self-contained bundle: prebuilt binaries + service files + LuCI + docs
+          # + install.sh, so the router can install with no git/Rust (SKIP_BUILD=1).
+          mkdir -p bundle/wrtg/dist
+          cp -r install.sh bootstrap.sh build-rust.sh VERSION openwrt docs bundle/wrtg/
+          cp dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm bundle/wrtg/dist/
+          tar -czf dist/wrtg-openwrt.tar.gz -C bundle wrtg
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum wrtg-linux-* wrtg-openwrt.tar.gz > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/wrtg-linux-amd64
+            dist/wrtg-linux-arm64
+            dist/wrtg-linux-arm
+            dist/wrtg-openwrt.tar.gz
+            bootstrap.sh
+            dist/SHA256SUMS
