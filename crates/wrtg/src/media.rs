@@ -3,10 +3,7 @@
 use crate::mtproto::{dc_alt_ips, dc_from_orig_dst};
 
 pub fn is_blocked_media_cdn(ip: &str) -> bool {
-    dc_alt_ips()
-        .get(ip)
-        .map(|e| e.is_media)
-        .unwrap_or(false)
+    dc_alt_ips().get(ip).map(|e| e.is_media).unwrap_or(false)
 }
 
 pub fn media_http_host(dc: i32) -> String {

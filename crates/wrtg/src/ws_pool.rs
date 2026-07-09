@@ -115,6 +115,9 @@ async fn fill_pool(key: PoolKey, target_ip: &str, count: usize) {
 
 /// Take a ready connection from the pool, if any.
 pub async fn acquire(dc: i32, is_media: bool) -> Option<PooledWs> {
+    if is_media {
+        return None;
+    }
     let key = (dc, is_media);
     let mut pools = POOLS.lock().await;
     let entry = pools.get_mut(&key)?;
@@ -134,6 +137,9 @@ pub async fn acquire(dc: i32, is_media: bool) -> Option<PooledWs> {
 
 /// Schedule background refill for one (DC, media) slot.
 pub fn schedule_refill(dc: i32, is_media: bool, target_ip: String) {
+    if is_media {
+        return;
+    }
     tokio::spawn(async move {
         refill_one((dc, is_media), &target_ip).await;
     });
@@ -150,13 +156,14 @@ async fn refill_one(key: PoolKey, target_ip: &str) {
 
 async fn refill_all() {
     for dc in 1..=5 {
+        if dc_front_ip(dc).is_empty() {
+            continue;
+        }
         let target = ws_target_ip(dc, "");
         if target.is_empty() {
             continue;
         }
-        for is_media in [false, true] {
-            refill_one((dc, is_media), &target).await;
-        }
+        refill_one((dc, false), &target).await;
     }
 }
 
@@ -172,36 +179,28 @@ pub fn start_refill_task() {
     });
 }
 
-/// Pre-warm pools for DC 1–5 when a front IP is configured.
+/// Pre-warm non-media pools for DCs that have a usable front target.
 pub fn warmup_pools() {
-    let sample = dc_front_ip(1);
-    if sample.is_empty() {
-        log::debug!("ws pool: skip warmup (no front IP)");
-        return;
-    }
     log::info!(
-        "ws pool: warming up DC1-5 (size={}, ttl={}s)",
+        "ws pool: warming non-media fronted DCs (size={}, ttl={}s)",
         pool_size(),
         pool_ttl().as_secs()
     );
     tokio::spawn(async move {
         for dc in 1..=5 {
+            if dc_front_ip(dc).is_empty() {
+                continue;
+            }
             let target = ws_target_ip(dc, "");
             if target.is_empty() {
                 continue;
             }
-            for is_media in [false, true] {
-                fill_pool((dc, is_media), &target, pool_size()).await;
-            }
+            fill_pool((dc, false), &target, pool_size()).await;
         }
         let pools = POOLS.lock().await;
         let total: usize = pools.values().map(|v| v.len()).sum();
         log::info!("ws pool: warmup done ({total} connection(s) ready)");
     });
-}
-
-pub async fn reset_pools() {
-    POOLS.lock().await.clear();
 }
 
 #[cfg(test)]

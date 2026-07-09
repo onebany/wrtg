@@ -16,15 +16,29 @@
 | — | `cf_proxy.rs` / `cf_balancer.rs` | New in v0.3 |
 | — | `ip_fail.rs` | New in v0.3 |
 | — | `config.rs` / `watchdog.rs` | New in v0.3 |
+| — | `dc_learn.rs` | New in v0.4.4 |
+| — | `tls.rs` | Verified TLS configuration in v0.5.0 |
 | `sockopt_linux.go` | `sockopt/linux.rs` | Ported |
 | `sockopt_other.go` | `sockopt/stub.rs` | Ported |
 | `sockopt.go` | `sockopt/mod.rs` | Ported |
 
 ## Notes
 
-- **CF Worker / CfProxy**: implemented in v0.3 (`connect_cf_worker_ws`, `cf_worker_pool`, `cf_proxy`, `cf_balancer`).
+- **CF Worker / CfProxy**: implemented in v0.3; Worker source is
+  `openwrt/cf-worker.js`.
 - **MTProxy secret mode**: not supported (direct obfuscated2 only, same as Go).
 - **Runtime `front-ip`**: `--front-ip`, `WRTG_FRONT_IP`, `FRONT_IP`, or `/etc/wrtg/config` on OpenWrt.
+
+## 0.5.0 behavior changes
+
+- WSS/HTTPS now requires a valid public TLS certificate.
+- Public CF Proxy auto-fetch defaults to off (`WRTG_CFPROXY_AUTO=1` opts in).
+- `/etc/init.d/wrtg reload` performs restart instead of sending ineffective SIGHUP.
+- Direct WS pool is non-media and only prewarms fronted DCs.
+- CF Worker pool size is total per `(DC, media)`, not multiplied by Worker count.
+- New optional `WRTG_CF_WORKER_TOKEN` header secret; deploy the matching Worker
+  source and `WRTG_TOKEN` secret before enabling it.
+- `dc-ips.txt` now overrides learned mappings on conflict.
 
 ## Test parity
 

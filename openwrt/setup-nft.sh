@@ -8,24 +8,28 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 load_config
 
-ELEMENTS="$(nft_cidr_elements)"
+ELEMENTS="$(nft_cidr_inline)"
+[ -n "$ELEMENTS" ] || {
+	echo "wrtg: no valid Telegram CIDRs; keeping current nft table" >&2
+	exit 1
+}
 
-nft delete table inet tg_tproxy 2>/dev/null || true
-nft add table inet tg_tproxy
-nft add set inet tg_tproxy telegram_cidr "{ type ipv4_addr; flags interval; elements = {
-$ELEMENTS
-}; }"
-nft add chain inet tg_tproxy prerouting "{ type nat hook prerouting priority dstnat; policy accept; }"
-nft add rule inet tg_tproxy prerouting \
-	iifname "$LAN_IF" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport 443 \
-	dnat ip to "$ROUTER_IP:$LISTEN_PORT"
-nft add rule inet tg_tproxy prerouting \
-	iifname "$LAN_IF" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport 80 \
-	dnat ip to "$ROUTER_IP:$LISTEN_PORT"
-nft add rule inet tg_tproxy prerouting \
-	iifname "$LAN_IF" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport 5222 \
-	dnat ip to "$ROUTER_IP:$LISTEN_PORT"
+RULES="$(mktemp)"
+trap 'rm -f "$RULES"' EXIT HUP INT TERM
 
-calls_zapret_bypass_apply 2>/dev/null || true
+if nft list table inet tg_tproxy >/dev/null 2>&1; then
+	echo "delete table inet tg_tproxy" >> "$RULES"
+fi
+cat >> "$RULES" <<EOF
+add table inet tg_tproxy
+add set inet tg_tproxy telegram_cidr { type ipv4_addr; flags interval; }
+add element inet tg_tproxy telegram_cidr { $ELEMENTS }
+add chain inet tg_tproxy prerouting { type nat hook prerouting priority dstnat; policy accept; }
+add rule inet tg_tproxy prerouting iifname "$LAN_IF" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport { 80, 443, 5222 } dnat ip to $ROUTER_IP:$LISTEN_PORT
+EOF
+
+# nft batches are atomic: a validation/apply error leaves the previous table intact.
+nft -c -f "$RULES"
+nft -f "$RULES"
 
 echo "wrtg DNAT loaded -> $ROUTER_IP:$LISTEN_PORT (ports 80,443,5222 on $LAN_IF)"

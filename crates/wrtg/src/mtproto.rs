@@ -55,8 +55,6 @@ fn reserved_starts() -> &'static [[u8; 4]; 7] {
 static FRONT_IP: OnceLock<RwLock<String>> = OnceLock::new();
 static DC_FRONT_IPS: OnceLock<RwLock<HashMap<i32, String>>> = OnceLock::new();
 static FRONT_DCS: OnceLock<RwLock<Vec<i32>>> = OnceLock::new();
-static CF_WORKER_DOMAIN: OnceLock<RwLock<String>> = OnceLock::new();
-static CF_PROXY_DOMAIN: OnceLock<RwLock<String>> = OnceLock::new();
 
 /// Default set of DCs the *global* FRONT_IP is applied to. The stock front
 /// `149.154.167.220` only fronts DC2/DC4 web sockets (DC1/3/5 get HTTP 302),
@@ -84,14 +82,6 @@ pub fn front_applies_to_dc(dc: i32) -> bool {
 
 fn front_ip_cell() -> &'static RwLock<String> {
     FRONT_IP.get_or_init(|| RwLock::new("149.154.167.220".to_string()))
-}
-
-fn cf_worker_domain_cell() -> &'static RwLock<String> {
-    CF_WORKER_DOMAIN.get_or_init(|| RwLock::new(String::new()))
-}
-
-fn cf_proxy_domain_cell() -> &'static RwLock<String> {
-    CF_PROXY_DOMAIN.get_or_init(|| RwLock::new(String::new()))
 }
 
 pub fn set_front_ip(ip: String) {
@@ -131,22 +121,6 @@ pub fn dc_front_ip(dc: i32) -> String {
     String::new()
 }
 
-pub fn set_cf_worker_domain(domain: String) {
-    *cf_worker_domain_cell().write().unwrap() = domain;
-}
-
-pub fn cf_worker_domain() -> String {
-    cf_worker_domain_cell().read().unwrap().clone()
-}
-
-pub fn set_cf_proxy_domain(domain: String) {
-    *cf_proxy_domain_cell().write().unwrap() = domain;
-}
-
-pub fn cf_proxy_domain() -> String {
-    cf_proxy_domain_cell().read().unwrap().clone()
-}
-
 pub fn dc_default_ip(dc: i32) -> Option<&'static str> {
     let dc = if dc == 203 { 2 } else { dc };
     dc_default_ips().get(&dc).copied()
@@ -176,20 +150,74 @@ pub fn dc_alt_ips() -> &'static HashMap<&'static str, DcAltEntry> {
     static MAP: OnceLock<HashMap<&'static str, DcAltEntry>> = OnceLock::new();
     MAP.get_or_init(|| {
         HashMap::from([
-            ("149.154.162.123", DcAltEntry { dc: 2, is_media: true }),
-            ("149.154.175.211", DcAltEntry { dc: 1, is_media: true }),
-            ("149.154.171.255", DcAltEntry { dc: 5, is_media: true }),
+            (
+                "149.154.162.123",
+                DcAltEntry {
+                    dc: 2,
+                    is_media: true,
+                },
+            ),
+            (
+                "149.154.175.211",
+                DcAltEntry {
+                    dc: 1,
+                    is_media: true,
+                },
+            ),
+            (
+                "149.154.171.255",
+                DcAltEntry {
+                    dc: 5,
+                    is_media: true,
+                },
+            ),
             // DC5 animated-emoji / sticker CDN (Telegram Desktop) — HTTP :80 needs
             // Host rewrite to kws5-1.web.telegram.org, else emoji render as blue placeholders.
-            ("91.108.56.155", DcAltEntry { dc: 5, is_media: true }),
-            ("149.154.175.58", DcAltEntry { dc: 1, is_media: false }),
-            ("149.154.175.53", DcAltEntry { dc: 1, is_media: false }),
-            ("149.154.167.41", DcAltEntry { dc: 2, is_media: false }),
-            ("149.154.167.50", DcAltEntry { dc: 2, is_media: false }),
+            (
+                "91.108.56.155",
+                DcAltEntry {
+                    dc: 5,
+                    is_media: true,
+                },
+            ),
+            (
+                "149.154.175.58",
+                DcAltEntry {
+                    dc: 1,
+                    is_media: false,
+                },
+            ),
+            (
+                "149.154.175.53",
+                DcAltEntry {
+                    dc: 1,
+                    is_media: false,
+                },
+            ),
+            (
+                "149.154.167.41",
+                DcAltEntry {
+                    dc: 2,
+                    is_media: false,
+                },
+            ),
+            (
+                "149.154.167.50",
+                DcAltEntry {
+                    dc: 2,
+                    is_media: false,
+                },
+            ),
             // DC2 main endpoint seen on Telegram for Android (Pixel) — not embedded
             // in the obfuscated handshake, so needs orig-dst → DC mapping here or it
             // falls to blind passthrough via the slow CF worker instead of the fast front.
-            ("149.154.167.35", DcAltEntry { dc: 2, is_media: false }),
+            (
+                "149.154.167.35",
+                DcAltEntry {
+                    dc: 2,
+                    is_media: false,
+                },
+            ),
         ])
     })
 }
@@ -599,10 +627,7 @@ mod tests {
             let targets = tcp_fallback_targets(2, "149.154.162.123", true, false, false);
             assert_eq!(
                 targets,
-                vec![
-                    "149.154.162.123".to_string(),
-                    "149.154.167.220".to_string()
-                ]
+                vec!["149.154.162.123".to_string(), "149.154.167.220".to_string()]
             );
         });
     }

@@ -100,7 +100,8 @@ impl MsgSplitter {
                 return -1;
             }
             let b = &self.plain_buf[offset + 1..offset + 4];
-            let payload_len = (b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16) * 4;
+            let payload_len =
+                (b[0] as usize | ((b[1] as usize) << 8) | ((b[2] as usize) << 16)) * 4;
             let packet_len = 4 + payload_len;
             if packet_len > MAX_MTPROTO_PACKET {
                 return 0;
@@ -128,9 +129,9 @@ impl MsgSplitter {
         if avail < 4 {
             return -1;
         }
-        let payload_len =
-            u32::from_le_bytes(self.plain_buf[offset..offset + 4].try_into().unwrap()) as usize
-                & 0x7FFF_FFFF;
+        let payload_len = u32::from_le_bytes(self.plain_buf[offset..offset + 4].try_into().unwrap())
+            as usize
+            & 0x7FFF_FFFF;
         if payload_len == 0 {
             return 0;
         }

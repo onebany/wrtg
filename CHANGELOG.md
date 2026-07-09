@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 — 2026-07-09
+
+### Security
+- Enabled public-root TLS certificate validation for every WSS/HTTPS connection.
+- Validate the complete WebSocket upgrade and safely handle fragmented/oversized frames.
+- Added `openwrt/cf-worker.js`: Telegram CIDR/port allowlist plus optional
+  `WRTG_TOKEN` / `WRTG_CF_WORKER_TOKEN` authentication.
+- LuCI service actions now require POST + session token; raw config is syntax-checked.
+- `bootstrap.sh` verifies the release bundle SHA256.
+
+### Fixed
+- WS/TCP bridges terminate when either direction closes; worker initial-send
+  failures can try the next Worker.
+- Direct pool no longer skips startup or creates unused media connections.
+- CF Worker pool size is bounded per `(DC, media)` instead of multiplied by the
+  number of Worker domains.
+- Public CF Proxy pool is opt-in and limited to three attempts per connection.
+- Strict `dc_learn` IPv4 parsing, media corrections, and admin-file precedence.
+- LAN interface/IP auto-detection, transactional CIDR/nft updates, complete LuCI uninstall.
+- OpenWrt `reload` now performs the restart required to apply file config.
+
+### Changed
+- Removed duplicated Worker/Proxy/config/nft documentation artifacts.
+- Optional zapret/calls helpers remain in the repository but are no longer
+  installed or invoked by wrtg core.
+- Consolidated current development documentation; release history lives here.
+
 ## 0.4.4 — 2026-07-09
 
 ### Added
@@ -39,7 +68,7 @@
 
 ### Added
 - **Worker passthrough for media/emoji** — TLS / MTProto-over-HTTP media traffic that can't be MTProto-bridged (so it would `blind_relay` to the front, which returns HTTP 302) now tunnels through the CF Worker to the **real DC IP:port**. Fixes emoji/stickers on transparent-mode networks where only the front is reachable. Requires the Worker to honour the `port` query param (see below); falls back to front passthrough if the Worker is unreachable. Disable with `WRTG_NO_WORKER_PASSTHROUGH=1`.
-- **CF Worker `port` param** — `wss://<worker>/apiws?dst=IP&dc=N&port=P` (default 443). Worker code updated in `openwrt/CfWorker.md` / `docs/CF_WORKER_SETUP.md`; backward-compatible (existing MTProto path unaffected).
+- **CF Worker `port` param** — `wss://<worker>/apiws?dst=IP&dc=N&port=P` (default 443). Worker source is now maintained in `openwrt/cf-worker.js`; backward-compatible (existing MTProto path unaffected).
 - **Richer LuCI dashboard** — Status page shows service/routing/CF-worker cards, per-DC last outcome, activity counts and auto-refresh; Logs get filter, colour highlighting and auto-refresh.
 - **Guided CF Worker section in LuCI Settings** — a dedicated per-router panel with a configured/not-set badge, a collapsible 5-step "create your Worker" how-to (links to Documentation → CF Worker Setup for the code), the `CF_WORKER_DOMAIN` field and Save & Restart. Plus a quick-set form (FRONT_IP / WRTG_FRONT_DCS / CF_PROXY_DOMAIN) and raw editor.
 

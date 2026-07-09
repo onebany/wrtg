@@ -37,9 +37,7 @@ where
                 log::warn!("accept: {e} (#{errors})");
                 tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                 if errors >= REBIND_AFTER_ERRORS {
-                    log::warn!(
-                        "{errors} consecutive accept errors, rebinding on {listen_addr}"
-                    );
+                    log::warn!("{errors} consecutive accept errors, rebinding on {listen_addr}");
                     match bind_transparent(&listen_addr).await {
                         Ok(l) => {
                             listener = l;

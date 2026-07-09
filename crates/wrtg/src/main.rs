@@ -3,15 +3,15 @@ use std::env;
 use tokio::net::TcpStream;
 
 use wrtg::bridge::{
-    blind_relay, should_skip_ws, try_cf_fallback, try_tcp_fallback, try_ws_bridge,
-    CfBridgeResult, TcpFallbackResult, WsBridgeResult,
+    blind_relay, should_skip_ws, try_cf_fallback, try_tcp_fallback, try_ws_bridge, CfBridgeResult,
+    TcpFallbackResult, WsBridgeResult,
 };
 use wrtg::cf_balancer::proxy_domains;
 use wrtg::cf_proxy_domains::{
     cfproxy_auto_enabled, seed_default_cfproxy_domains, start_cfproxy_refresh_task,
 };
 use wrtg::cf_worker_pool::{start_refill_task as start_cf_refill, warmup_pools as warmup_cf_pools};
-use wrtg::config::{apply_config, load_from_env, reload_from_env};
+use wrtg::config::{apply_config, load_from_env};
 use wrtg::handshake::read_client_init;
 use wrtg::mtproto::{
     dc_from_orig_dst, generate_relay_init, proto_tag_for, CryptoCtx, HandshakeInfo,
@@ -83,25 +83,15 @@ async fn main() {
         }
     };
 
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        if let Ok(mut sighup) = signal(SignalKind::hangup()) {
-            tokio::spawn(async move {
-                loop {
-                    sighup.recv().await;
-                    reload_from_env().await;
-                }
-            });
-        }
-    }
-
     serve(listener, cfg.listen_addr.clone(), handle_conn).await;
 }
 
 async fn handle_conn(stream: TcpStream) {
     tune_tcp(&stream);
-    let remote = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+    let remote = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
 
     let (orig_ip, orig_port) = match get_original_dst(&stream) {
         Ok((ip, port)) => (ip, port),
@@ -221,7 +211,17 @@ async fn handle_handshake(
         }
     }
 
-    match try_tcp_fallback(client, &relay_init, ctx, orig_ip, hs.dc, bridge_media, label).await {
+    match try_tcp_fallback(
+        client,
+        &relay_init,
+        ctx,
+        orig_ip,
+        hs.dc,
+        bridge_media,
+        label,
+    )
+    .await
+    {
         TcpFallbackResult::Connected => return,
         TcpFallbackResult::Failed(c) => client = c,
     };

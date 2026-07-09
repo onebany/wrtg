@@ -6,7 +6,7 @@ all: rust
 
 build: rust
 
-rust: rust-amd64 rust-arm64
+rust: rust-amd64 rust-arm64 rust-arm
 
 rust-amd64:
 	sh build-rust.sh amd64

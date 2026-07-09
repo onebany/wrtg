@@ -7,16 +7,23 @@ import { readfile, writefile } from 'fs';
 
 let cfg_path = '/etc/wrtg/config';
 let msg = '';
+let msg_ok = true;
+
+function cfg_escape(val) {
+	val = replace(val, /[\r\n]/g, '');
+	val = replace(val, /\\/g, '\\\\');
+	return replace(val, /"/g, '\\"');
+}
 
 function set_key(text, key, val) {
 	let pfx = key + '=';
 	let has = false, out = [];
 	for (let line in split(text, /\n/)) {
-		if (substr(trim(line), 0, length(pfx)) == pfx) { out[length(out)] = key + '="' + val + '"'; has = true; }
+		if (substr(trim(line), 0, length(pfx)) == pfx) { out[length(out)] = key + '="' + cfg_escape(val) + '"'; has = true; }
 		else out[length(out)] = line;
 	}
 	let joined = join('\n', out);
-	if (!has) joined = trim(joined) + '\n' + key + '="' + val + '"\n';
+	if (!has) joined = trim(joined) + '\n' + key + '="' + cfg_escape(val) + '"\n';
 	return joined;
 }
 
@@ -32,28 +39,48 @@ function cfg_val(text, key) {
 	return '';
 }
 
-if (http.getenv('REQUEST_METHOD') == 'POST') {
+if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.authtoken) {
 	let form = http.formvalue('_form');
+	let saved = false;
 	if (form == 'quick') {
 		let text = readfile(cfg_path) ?? '';
-		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'CF_PROXY_DOMAIN']) {
+		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN']) {
 			let v = http.formvalue(k);
 			if (v != null) text = set_key(text, k, trim(v));
 		}
 		writefile(cfg_path, text);
+		system('chmod 600 /etc/wrtg/config');
 		msg = _('Saved. Restart wrtg to apply pools/scope changes.');
+		saved = true;
 	} else if (form == 'raw') {
 		let data = http.formvalue('_cfg');
-		if (data != null) { writefile(cfg_path, data); msg = _('Raw config saved.'); }
+		if (data != null) {
+			let tmp = '/tmp/wrtg-config.validate';
+			writefile(tmp, data);
+			if (system('/bin/sh -n /tmp/wrtg-config.validate >/dev/null 2>&1') == 0) {
+				writefile(cfg_path, data);
+				system('chmod 600 /etc/wrtg/config');
+				msg = _('Raw config saved.');
+				saved = true;
+			} else {
+				msg = _('Config syntax is invalid; changes were not saved.');
+				msg_ok = false;
+			}
+			system('rm -f /tmp/wrtg-config.validate');
+		}
 	}
-	if (http.formvalue('_restart') == '1') {
+	if (saved && http.formvalue('_restart') == '1') {
 		system('/etc/init.d/wrtg restart >/dev/null 2>&1');
 		msg += ' ' + _('Service restarted.');
 	}
+} else if (http.getenv('REQUEST_METHOD') == 'POST') {
+	msg = _('Invalid request token.');
+	msg_ok = false;
 }
 
 let cfg = readfile(cfg_path) ?? '';
 let cur_worker = cfg_val(cfg, 'CF_WORKER_DOMAIN');
+let cur_token = cfg_val(cfg, 'WRTG_CF_WORKER_TOKEN');
 let url = dispatcher.build_url('admin', 'services', 'wrtg', 'config');
 let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc=CF_WORKER_SETUP';
 %}
@@ -62,7 +89,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc
 
 <h2>{{ _('wrtg Settings') }}</h2>
 
-{% if (length(msg)) { %}<div class="alert-message success">{{ msg }}</div>{% } %}
+{% if (length(msg)) { %}<div class="alert-message {{ msg_ok ? 'success' : 'warning' }}">{{ msg }}</div>{% } %}
 
 <div class="cbi-section" style="border:1px solid var(--border-color-medium,#4a4a4a);border-radius:8px;padding:14px 16px;margin-bottom:14px">
 	<h3 style="margin-top:0">Cloudflare Worker
@@ -91,6 +118,11 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc
 			<label class="cbi-value-title">CF_WORKER_DOMAIN</label>
 			<div class="cbi-value-field"><input type="text" name="CF_WORKER_DOMAIN" value="{{ cur_worker }}" placeholder="name.username.workers.dev" style="width:30em" />
 				<div class="cbi-value-description">Адрес вашего Worker (через запятую — несколько). Пусто = без Worker.</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">WRTG_CF_WORKER_TOKEN</label>
+			<div class="cbi-value-field"><input type="password" name="WRTG_CF_WORKER_TOKEN" value="{{ cur_token }}" autocomplete="new-password" style="width:30em" />
+				<div class="cbi-value-description">Optional secret matching the Worker's WRTG_TOKEN secret.</div></div>
 		</div>
 		<div class="cbi-page-actions">
 			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">Save &amp; Restart</button>

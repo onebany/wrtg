@@ -57,25 +57,30 @@ for (let line in split(loglines, /\n/)) {
 }
 
 // counts in the window
-let n_worker = length(split(loglines, 'via CF worker')) - 1;
+let n_worker = 0; for (let l in split(loglines, /\n/)) if (match(l, /WS connected via CF worker/)) n_worker++;
 let n_ws = 0; for (let l in split(loglines, /\n/)) if (match(l, /WS connected via kws/)) n_ws++;
 let n_pass = 0; for (let l in split(loglines, /\n/)) if (match(l, /passthrough ->/)) n_pass++;
 let n_wpass = 0; for (let l in split(loglines, /\n/)) if (match(l, /passthrough via CF worker/)) n_wpass++;
 
 // dc_learn: admin + learned IP→DC maps
 let learn_raw = readfile('/etc/wrtg/dc-ips-learned.txt') ?? '';
-let learn_lines = [];
+let learn_lines = [], learn_ips = [];
 for (let line in split(learn_raw, /\n/)) {
 	line = trim(line);
-	if (length(line) && substr(line, 0, 1) != '#') push(learn_lines, line);
+	if (!length(line) || substr(line, 0, 1) == '#') continue;
+	let ip = split(line, /\s+/)[0];
+	let found = -1;
+	for (let i = 0; i < length(learn_ips); i++) {
+		if (learn_ips[i] == ip) { found = i; break; }
+	}
+	if (found >= 0) learn_lines[found] = line;
+	else { push(learn_ips, ip); push(learn_lines, line); }
 }
 let learn_n = length(learn_lines);
 let learn_preview = [];
-let li = 0;
-for (let line in learn_lines) {
-	if (li >= 5) break;
-	push(learn_preview, line);
-	li++;
+let learn_start = learn_n > 5 ? learn_n - 5 : 0;
+for (let i = learn_start; i < learn_n; i++) {
+	push(learn_preview, learn_lines[i]);
 }
 let manual_exists = length(readfile('/etc/wrtg/dc-ips.txt') ?? '') > 0 || sh('[ -f /etc/wrtg/dc-ips.txt ] && echo 1') == '1';
 
@@ -148,7 +153,7 @@ function badge(ok, yes, no) {
 	{% if (learn_n > 0) { %}
 		<pre style="margin:8px 0 0;font-size:12px;max-height:8em;overflow:auto;opacity:.85">{%
 			for (let line in learn_preview) { %}{{ line }}
-{% } %}{% if (learn_n > 5) { %}… (+{{ learn_n - 5 }})
+{% } %}{% if (learn_n > 5) { %}… ({{ learn_n - 5 }} earlier)
 {% } %}</pre>
 	{% } else { %}
 		<p style="font-size:12px;opacity:.65;margin:6px 0 0">{{ _('No learned entries yet. Hand-edit /etc/wrtg/dc-ips.txt (IP DC [media]) or wait for clients that embed the DC in the handshake.') }}</p>
@@ -170,10 +175,12 @@ function badge(ok, yes, no) {
 </div>
 
 <div class="cbi-section wrtg-actions">
-	<a class="cbi-button cbi-button-apply" href="{{ base }}?act=restart">{{ _('Restart') }}</a>
-	<a class="cbi-button cbi-button-action" href="{{ base }}?act=reload">{{ _('Reload config') }}</a>
-	{% if (running) { %}<a class="cbi-button cbi-button-reset" href="{{ base }}?act=stop">{{ _('Stop') }}</a>
-	{% } else { %}<a class="cbi-button cbi-button-save" href="{{ base }}?act=start">{{ _('Start') }}</a>{% } %}
+	<form method="post" action="{{ base }}" style="display:inline">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<button class="cbi-button cbi-button-apply" type="submit" name="act" value="restart">{{ _('Restart') }}</button>
+		{% if (running) { %}<button class="cbi-button cbi-button-reset" type="submit" name="act" value="stop">{{ _('Stop') }}</button>
+		{% } else { %}<button class="cbi-button cbi-button-save" type="submit" name="act" value="start">{{ _('Start') }}</button>{% } %}
+	</form>
 	<a class="cbi-button" href="{{ self }}">{{ _('Refresh') }}</a>
 	<label style="margin-left:12px;font-size:13px"><input type="checkbox" id="wrtg-auto"> {{ _('auto-refresh 5s') }}</label>
 </div>

@@ -1,17 +1,21 @@
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use crate::mtproto::MAX_WS_PAYLOAD;
 use crate::sockopt::tune_tcp;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use rand::RngCore;
 use rustls::pki_types::ServerName;
+use sha1::{Digest, Sha1};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tokio_rustls::TlsConnector;
 
 type WsStream = tokio_rustls::client::TlsStream<TcpStream>;
+
+const MAX_HTTP_LINE: usize = 8 * 1024;
+const MAX_HTTP_HEADERS: usize = 32 * 1024;
+const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 pub struct RawWebSocket {
     stream: WsStream,
@@ -31,18 +35,21 @@ pub async fn connect_ws(
     path: &str,
     connect_timeout: Duration,
 ) -> std::io::Result<RawWebSocket> {
+    connect_ws_with_headers(target_ip, domain, path, connect_timeout, &[]).await
+}
+
+async fn connect_ws_with_headers(
+    target_ip: &str,
+    domain: &str,
+    path: &str,
+    connect_timeout: Duration,
+    extra_headers: &[(&str, &str)],
+) -> std::io::Result<RawWebSocket> {
     let addr = format!("{target_ip}:443");
     let tcp = timeout(connect_timeout, TcpStream::connect(&addr)).await??;
     tune_tcp(&tcp);
 
-    let config = Arc::new(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-            .with_no_client_auth(),
-    );
-
-    let connector = TlsConnector::from(config);
+    let connector = crate::tls::connector();
     let server_name = ServerName::try_from(domain.to_string()).map_err(std::io::Error::other)?;
     let mut stream = timeout(connect_timeout, connector.connect(server_name, tcp)).await??;
 
@@ -52,34 +59,92 @@ pub async fn connect_ws(
         STANDARD.encode(key)
     };
 
-    let req = format!(
+    let mut req = format!(
         "GET {path} HTTP/1.1\r\n\
          Host: {domain}\r\n\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: {ws_key}\r\n\
          Sec-WebSocket-Version: 13\r\n\
-         Sec-WebSocket-Protocol: binary\r\n\
-         \r\n"
+         Sec-WebSocket-Protocol: binary\r\n"
     );
+    for (name, value) in extra_headers {
+        if name.contains(['\r', '\n', ':']) || value.contains(['\r', '\n']) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid WebSocket header",
+            ));
+        }
+        req.push_str(name);
+        req.push_str(": ");
+        req.push_str(value);
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
 
     timeout(connect_timeout, stream.write_all(req.as_bytes())).await??;
 
     let mut status_line = Vec::new();
-    read_line(&mut stream, &mut status_line, connect_timeout).await?;
+    read_line(
+        &mut stream,
+        &mut status_line,
+        connect_timeout,
+        MAX_HTTP_LINE,
+    )
+    .await?;
+    let mut headers = HashMap::<String, String>::new();
+    let mut headers_len = status_line.len();
     loop {
         let mut line = Vec::new();
-        read_line(&mut stream, &mut line, connect_timeout).await?;
+        read_line(&mut stream, &mut line, connect_timeout, MAX_HTTP_LINE).await?;
+        headers_len += line.len();
+        if headers_len > MAX_HTTP_HEADERS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WebSocket response headers too large",
+            ));
+        }
         if line == b"\r\n" || line == b"\n" {
             break;
         }
+        let line = String::from_utf8_lossy(&line);
+        let Some((name, value)) = line.trim_end().split_once(':') else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "malformed WebSocket response header",
+            ));
+        };
+        headers
+            .entry(name.trim().to_ascii_lowercase())
+            .and_modify(|old| {
+                old.push(',');
+                old.push_str(value.trim());
+            })
+            .or_insert_with(|| value.trim().to_string());
     }
 
     let status = String::from_utf8_lossy(&status_line);
-    if !status.contains(" 101 ") {
+    if status.split_whitespace().nth(1) != Some("101") {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("WS handshake failed: {}", status.trim()),
+        ));
+    }
+    let upgrade_ok = headers
+        .get("upgrade")
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    let connection_ok = headers.get("connection").is_some_and(|v| {
+        v.split(',')
+            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+    });
+    let expected_accept = websocket_accept(&ws_key);
+    let accept_ok = headers
+        .get("sec-websocket-accept")
+        .is_some_and(|v| v == &expected_accept);
+    if !upgrade_ok || !connection_ok || !accept_ok {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid WebSocket upgrade response",
         ));
     }
 
@@ -94,15 +159,29 @@ async fn read_line(
     stream: &mut tokio_rustls::client::TlsStream<TcpStream>,
     buf: &mut Vec<u8>,
     t: Duration,
+    max_len: usize,
 ) -> std::io::Result<()> {
     let mut byte = [0u8; 1];
     loop {
         timeout(t, stream.read_exact(&mut byte)).await??;
         buf.push(byte[0]);
+        if buf.len() > max_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "HTTP response line too long",
+            ));
+        }
         if byte[0] == b'\n' {
             return Ok(());
         }
     }
+}
+
+fn websocket_accept(key: &str) -> String {
+    let mut sha1 = Sha1::new();
+    sha1.update(key.as_bytes());
+    sha1.update(WS_GUID.as_bytes());
+    STANDARD.encode(sha1.finalize())
 }
 
 pub async fn connect_cf_worker_ws(
@@ -112,7 +191,7 @@ pub async fn connect_cf_worker_ws(
     connect_timeout: Duration,
 ) -> std::io::Result<RawWebSocket> {
     let path = format!("/apiws?dst={dst_ip}&dc={dc}");
-    connect_ws(worker_domain, worker_domain, &path, connect_timeout).await
+    connect_cf_worker(worker_domain, &path, connect_timeout).await
 }
 
 /// Open a raw TCP tunnel to `dst_ip:dst_port` through the CF Worker (for
@@ -124,7 +203,31 @@ pub async fn connect_cf_worker_tcp(
     connect_timeout: Duration,
 ) -> std::io::Result<RawWebSocket> {
     let path = format!("/apiws?dst={dst_ip}&dc=0&port={dst_port}");
-    connect_ws(worker_domain, worker_domain, &path, connect_timeout).await
+    connect_cf_worker(worker_domain, &path, connect_timeout).await
+}
+
+async fn connect_cf_worker(
+    worker_domain: &str,
+    path: &str,
+    connect_timeout: Duration,
+) -> std::io::Result<RawWebSocket> {
+    let token = std::env::var("WRTG_CF_WORKER_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let headers = if token.is_empty() {
+        Vec::new()
+    } else {
+        vec![("X-WRTG-Token", token.as_str())]
+    };
+    connect_ws_with_headers(
+        worker_domain,
+        worker_domain,
+        path,
+        connect_timeout,
+        &headers,
+    )
+    .await
 }
 
 pub fn is_ws_redirect(err: &std::io::Error) -> bool {
@@ -153,16 +256,24 @@ impl RawWebSocket {
     }
 
     pub async fn recv(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        let mut fragmented = None;
         loop {
-            let (opcode, payload) = read_frame(&mut self.stream).await?;
+            let (fin, opcode, payload) = read_frame(&mut self.stream).await?;
             match opcode {
                 0x8 => return Ok(None),
                 0x9 => {
                     let pong = build_ws_frame(0xA, &payload, true);
-                    let _ = self.stream.write_all(&pong).await;
+                    self.stream.write_all(&pong).await?;
                 }
-                0x1 | 0x2 => return Ok(Some(payload)),
-                _ => {}
+                0xA => {}
+                0x0..=0x2 => {
+                    if let Some(message) =
+                        assemble_data_message(fin, opcode, payload, &mut fragmented)?
+                    {
+                        return Ok(Some(message));
+                    }
+                }
+                _ => return Err(ws_protocol_error("unsupported WebSocket opcode")),
             }
         }
     }
@@ -204,25 +315,46 @@ impl WsReadHalf {
         &mut self,
         pong_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
     ) -> std::io::Result<Option<Vec<u8>>> {
+        let mut fragmented = None;
         loop {
-            let (opcode, payload) = read_frame(&mut self.read).await?;
+            let (fin, opcode, payload) = read_frame(&mut self.read).await?;
             match opcode {
                 0x8 => return Ok(None),
                 0x9 => {
                     let pong = build_ws_frame(0xA, &payload, true);
-                    let _ = pong_tx.send(pong).await;
+                    pong_tx.send(pong).await.map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            "WebSocket writer closed",
+                        )
+                    })?;
                 }
-                0x1 | 0x2 => return Ok(Some(payload)),
-                _ => {}
+                0xA => {}
+                0x0..=0x2 => {
+                    if let Some(message) =
+                        assemble_data_message(fin, opcode, payload, &mut fragmented)?
+                    {
+                        return Ok(Some(message));
+                    }
+                }
+                _ => return Err(ws_protocol_error("unsupported WebSocket opcode")),
             }
         }
     }
 }
 
-async fn read_frame<R: AsyncReadExt + Unpin>(read: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
+async fn read_frame<R: AsyncReadExt + Unpin>(read: &mut R) -> std::io::Result<(bool, u8, Vec<u8>)> {
     let mut hdr = [0u8; 2];
     read.read_exact(&mut hdr).await?;
+    if hdr[0] & 0x70 != 0 {
+        return Err(ws_protocol_error("WebSocket RSV bits are set"));
+    }
+    let fin = hdr[0] & 0x80 != 0;
     let opcode = hdr[0] & 0x0F;
+    let masked = hdr[1] & 0x80 != 0;
+    if masked {
+        return Err(ws_protocol_error("masked server WebSocket frame"));
+    }
     let mut length = (hdr[1] & 0x7F) as usize;
     match length {
         126 => {
@@ -251,20 +383,55 @@ async fn read_frame<R: AsyncReadExt + Unpin>(read: &mut R) -> std::io::Result<(u
             format!("WS frame too large: {length}"),
         ));
     }
+    if opcode >= 0x8 && (!fin || length > 125) {
+        return Err(ws_protocol_error("invalid WebSocket control frame"));
+    }
 
-    let payload = if hdr[1] & 0x80 != 0 {
-        let mut mask_key = [0u8; 4];
-        read.read_exact(&mut mask_key).await?;
-        let mut payload = vec![0u8; length];
-        read.read_exact(&mut payload).await?;
-        xor_mask(&mut payload, &mask_key);
-        payload
-    } else {
-        let mut payload = vec![0u8; length];
-        read.read_exact(&mut payload).await?;
-        payload
-    };
-    Ok((opcode, payload))
+    let mut payload = vec![0u8; length];
+    read.read_exact(&mut payload).await?;
+    Ok((fin, opcode, payload))
+}
+
+fn assemble_data_message(
+    fin: bool,
+    opcode: u8,
+    payload: Vec<u8>,
+    fragmented: &mut Option<Vec<u8>>,
+) -> std::io::Result<Option<Vec<u8>>> {
+    match opcode {
+        0x1 | 0x2 => {
+            if fragmented.is_some() {
+                return Err(ws_protocol_error(
+                    "new WebSocket data frame during fragmented message",
+                ));
+            }
+            if fin {
+                return Ok(Some(payload));
+            }
+            *fragmented = Some(payload);
+            Ok(None)
+        }
+        0x0 => {
+            let Some(message) = fragmented.as_mut() else {
+                return Err(ws_protocol_error(
+                    "WebSocket continuation without initial frame",
+                ));
+            };
+            if message.len().saturating_add(payload.len()) > MAX_WS_PAYLOAD {
+                return Err(ws_protocol_error("fragmented WebSocket message too large"));
+            }
+            message.extend_from_slice(&payload);
+            if fin {
+                return Ok(fragmented.take());
+            }
+            Ok(None)
+        }
+        _ => Err(ws_protocol_error("not a WebSocket data frame")),
+    }
+}
+
+fn ws_protocol_error(message: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message)
 }
 
 fn build_ws_frame(opcode: u8, data: &[u8], mask: bool) -> Vec<u8> {
@@ -321,12 +488,6 @@ fn ws_header_masked(fb: u8, length: usize, mask_key: &[u8; 4]) -> Vec<u8> {
     }
 }
 
-fn xor_mask(data: &mut [u8], mask: &[u8; 4]) {
-    for (i, b) in data.iter_mut().enumerate() {
-        *b ^= mask[i % 4];
-    }
-}
-
 fn xor_mask_owned(data: &[u8], mask: &[u8; 4]) -> Vec<u8> {
     data.iter()
         .enumerate()
@@ -334,42 +495,35 @@ fn xor_mask_owned(data: &[u8], mask: &[u8; 4]) -> Vec<u8> {
         .collect()
 }
 
-#[derive(Debug)]
-struct SkipServerVerification;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    #[test]
+    fn websocket_accept_matches_rfc6455() {
+        assert_eq!(
+            websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
     }
 
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    #[test]
+    fn fragmented_message_is_reassembled() {
+        let mut fragmented = None;
+        assert!(
+            assemble_data_message(false, 0x2, b"tele".to_vec(), &mut fragmented)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            assemble_data_message(true, 0x0, b"gram".to_vec(), &mut fragmented).unwrap(),
+            Some(b"telegram".to_vec())
+        );
     }
 
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
+    #[test]
+    fn unexpected_continuation_is_rejected() {
+        let mut fragmented = None;
+        assert!(assemble_data_message(true, 0x0, Vec::new(), &mut fragmented).is_err());
     }
 }

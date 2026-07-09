@@ -1,10 +1,8 @@
 # wrtg configuration — /etc/wrtg/config
 #
 # Apply changes:
-#   /etc/init.d/wrtg reload    # SIGHUP — re-reads FRONT_IP, CF domains, per-DC IPs
-#   /etc/init.d/wrtg restart   # full restart — REQUIRED for pool sizes/TTLs,
-#                              # cooldown/blacklist TTLs, LISTEN, and any newly
-#                              # added variable (procd sets env at start only)
+#   /etc/init.d/wrtg restart   # apply daemon configuration changes
+#   /etc/init.d/wrtg reload    # alias for restart (kept for OpenWrt convention)
 #   /etc/wrtg/update-cidr.sh   # refresh Telegram CIDR + nft only
 #
 # Windows-edited configs (CRLF) are handled automatically.
@@ -14,8 +12,8 @@
 # Router LAN IP (DNAT target). Auto-detected on install if empty.
 ROUTER_IP=""
 
-# LAN interface facing clients (Telegram devices).
-LAN_IF="eth0"
+# LAN interface facing clients. Empty = detect network.lan device / br-lan.
+LAN_IF=""
 
 # wrtg listen address (must match DNAT port). Restart to apply.
 LISTEN="0.0.0.0:8443"
@@ -51,16 +49,21 @@ FRONT_IP="149.154.167.220"
 
 # Cloudflare Worker domain(s) for WS fallback (comma-separated).
 # Native wrtg solution — no zapret required. Restart to apply.
-# Setup guide: docs/CF_WORKER_SETUP.md  |  template: openwrt/config.cfworker.template
+# Setup guide: docs/CF_WORKER_SETUP.md  |  source: openwrt/cf-worker.js
 # CF_WORKER_DOMAIN="your-worker.username.workers.dev"
+
+# Optional Worker secret. Configure the same value as the Cloudflare Worker
+# secret WRTG_TOKEN; sent in the X-WRTG-Token header (not in URL/logs).
+# WRTG_CF_WORKER_TOKEN="replace-with-a-long-random-value"
 
 # Cloudflare-proxied domain(s) for WS fallback (comma-separated).
 # If unset, wrtg auto-fetches the shared pool from Flowseal/tg-ws-proxy (hourly).
 # Community pool domains may be dead/blocked — prefer CF_WORKER_DOMAIN or your own domain.
 # CF_PROXY_DOMAIN="your-domain.example.com"
 
-# Auto-fetch shared CF Proxy domain pool (default on when CF_PROXY_DOMAIN is empty).
-# WRTG_CFPROXY_AUTO="0"
+# Auto-fetch shared CF Proxy domain pool. Off by default because public pools
+# are untrusted and often stale; prefer your own Worker/domain.
+# WRTG_CFPROXY_AUTO="1"
 
 # Disable CF Worker/Proxy fallback entirely.
 # WRTG_NO_CFPROXY="1"
@@ -72,11 +75,11 @@ FRONT_IP="149.154.167.220"
 
 # ── Tuning (uncomment to override; restart to apply) ─────────────────────────
 
-# Direct WS connection pool, per (DC, media). Warmup runs when FRONT_IP is set.
+# Direct WS connection pool, non-media only, for DCs with a configured front.
 # WRTG_WS_POOL_SIZE="2"              # default 2, max 8
 # WRTG_WS_POOL_TTL_SEC="120"         # pool connection TTL (seconds)
 
-# CF Worker connection pool (only used when CF_WORKER_DOMAIN is set).
+# CF Worker pool, total per (DC, media) across all configured Workers.
 # WRTG_CF_WORKER_POOL_SIZE="2"       # default 2, max 4
 # WRTG_CF_WORKER_POOL_TTL_SEC="120"  # pool connection TTL (seconds)
 

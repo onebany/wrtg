@@ -1,6 +1,5 @@
 //! Auto-fetch shared CF Proxy domain pool from Flowseal/tg-ws-proxy (hourly).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
@@ -8,16 +7,15 @@ use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tokio_rustls::TlsConnector;
 
 use crate::cf_balancer::{cf_fallback_disabled, set_proxy_domains};
-use crate::mtproto::set_cf_proxy_domain;
 
 pub const CFPROXY_DOMAINS_URL: &str =
     "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt";
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_HTTP_RESPONSE: usize = 1024 * 1024;
 const MIN_VALID_DOMAINS: usize = 3;
 const DOMAIN_SUFFIX: &str = ".co.uk";
 
@@ -87,7 +85,8 @@ fn proxy_env_set(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Auto-fetch enabled when CF fallback is on, no user domain set, and not explicitly disabled.
+/// Auto-fetch is opt-in because public CF domain pools are untrusted and can
+/// introduce long fallback delays when stale.
 pub fn cfproxy_auto_enabled() -> bool {
     if cf_fallback_disabled() {
         return false;
@@ -100,7 +99,7 @@ pub fn cfproxy_auto_enabled() -> bool {
             let v = v.trim();
             v == "1" || v.eq_ignore_ascii_case("true")
         }
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -122,10 +121,7 @@ pub fn is_valid_domain(domain: &str) -> bool {
         if label.starts_with('-') || label.ends_with('-') {
             return false;
         }
-        if !label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return false;
         }
     }
@@ -148,8 +144,6 @@ pub fn normalize_domain_pool(domains: &[String]) -> Vec<String> {
 }
 
 pub fn apply_proxy_domains(domains: Vec<String>) {
-    let primary = domains.first().cloned().unwrap_or_default();
-    set_cf_proxy_domain(primary);
     set_proxy_domains(domains);
 }
 
@@ -159,9 +153,7 @@ pub async fn fetch_cfproxy_domains() -> Vec<String> {
         .take(7)
         .map(char::from)
         .collect();
-    let path = format!(
-        "/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt?{cache_bust}"
-    );
+    let path = format!("/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt?{cache_bust}");
 
     let body = match https_get("raw.githubusercontent.com", &path, FETCH_TIMEOUT).await {
         Ok(b) => b,
@@ -196,9 +188,7 @@ pub async fn refresh_cfproxy_domains() {
     }
 
     if fetched.is_empty() {
-        log::warn!(
-            "CF proxy domain refresh failed or empty response; keeping current domain pool"
-        );
+        log::warn!("CF proxy domain refresh failed or empty response; keeping current domain pool");
     } else {
         log::warn!(
             "Ignoring fetched CF proxy domains due to low-quality payload \
@@ -272,13 +262,7 @@ async fn connect_pinned(host: &str, connect_timeout: Duration) -> std::io::Resul
 async fn https_get(host: &str, path: &str, connect_timeout: Duration) -> std::io::Result<Vec<u8>> {
     let tcp = connect_pinned(host, connect_timeout).await?;
 
-    let config = Arc::new(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-            .with_no_client_auth(),
-    );
-    let connector = TlsConnector::from(config);
+    let connector = crate::tls::connector();
     let server_name = ServerName::try_from(host.to_string()).map_err(std::io::Error::other)?;
     let mut stream = timeout(connect_timeout, connector.connect(server_name, tcp)).await??;
 
@@ -292,7 +276,14 @@ async fn https_get(host: &str, path: &str, connect_timeout: Duration) -> std::io
     timeout(connect_timeout, stream.write_all(req.as_bytes())).await??;
 
     let mut buf = Vec::new();
-    timeout(connect_timeout, stream.read_to_end(&mut buf)).await??;
+    let mut limited = stream.take((MAX_HTTP_RESPONSE + 1) as u64);
+    timeout(connect_timeout, limited.read_to_end(&mut buf)).await??;
+    if buf.len() > MAX_HTTP_RESPONSE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "HTTP response too large",
+        ));
+    }
 
     let header_end = buf
         .windows(4)
@@ -308,46 +299,6 @@ async fn https_get(host: &str, path: &str, connect_timeout: Duration) -> std::io
         ));
     }
     Ok(body)
-}
-
-#[derive(Debug)]
-struct SkipServerVerification;
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
 
 #[cfg(test)]
@@ -390,11 +341,11 @@ mod tests {
     }
 
     #[test]
-    fn cfproxy_auto_defaults_on_without_user_domain() {
+    fn cfproxy_auto_defaults_off_without_user_domain() {
         std::env::remove_var("WRTG_NO_CFPROXY");
         std::env::remove_var("WRTG_CFPROXY_AUTO");
         std::env::remove_var("CF_PROXY_DOMAIN");
         std::env::remove_var("WRTG_CF_PROXY_DOMAINS");
-        assert!(cfproxy_auto_enabled());
+        assert!(!cfproxy_auto_enabled());
     }
 }

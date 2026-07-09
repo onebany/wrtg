@@ -1,16 +1,11 @@
-//! Runtime configuration loading and hot-reload (SIGHUP).
+//! Runtime configuration loading at process startup.
 
 use std::collections::HashMap;
 use std::env;
 
 use crate::cf_balancer::{parse_domain_list, set_proxy_domains, set_worker_domains};
-use crate::cf_proxy_domains::{cfproxy_auto_enabled, refresh_cfproxy_domains, seed_default_cfproxy_domains};
-use crate::cf_worker_pool;
-use crate::ip_fail;
-use crate::mtproto::{
-    set_cf_proxy_domain, set_cf_worker_domain, set_dc_front_ips, set_front_dcs, set_front_ip,
-};
-use crate::ws_pool;
+use crate::cf_proxy_domains::normalize_domain_pool;
+use crate::mtproto::{set_dc_front_ips, set_front_dcs, set_front_ip};
 
 #[derive(Debug, Clone)]
 pub struct WrtgConfig {
@@ -69,6 +64,7 @@ pub fn parse_front_dcs(raw: &str) -> Vec<i32> {
     let mut out: Vec<i32> = v
         .split([',', ';', ' '])
         .filter_map(|s| s.trim().parse::<i32>().ok())
+        .filter(|dc| (1..=5).contains(dc) || *dc == 203)
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -83,9 +79,7 @@ fn load_worker_domains() -> Vec<String> {
     if let Ok(v) = env::var("WRTG_CF_WORKER_DOMAINS") {
         domains.extend(parse_domain_list(&v));
     }
-    domains.sort();
-    domains.dedup();
-    domains
+    normalize_domain_pool(&domains)
 }
 
 fn load_proxy_domains() -> Vec<String> {
@@ -96,9 +90,7 @@ fn load_proxy_domains() -> Vec<String> {
     if let Ok(v) = env::var("WRTG_CF_PROXY_DOMAINS") {
         domains.extend(parse_domain_list(&v));
     }
-    domains.sort();
-    domains.dedup();
-    domains
+    normalize_domain_pool(&domains)
 }
 
 pub fn parse_dc_front_ips() -> HashMap<i32, String> {
@@ -142,37 +134,9 @@ pub fn apply_config(cfg: &WrtgConfig) {
     set_dc_front_ips(cfg.dc_front_ips.clone());
     set_front_dcs(cfg.front_dcs.clone());
 
-    let worker_primary = cfg.cf_worker_domains.first().cloned().unwrap_or_default();
-    set_cf_worker_domain(worker_primary);
     set_worker_domains(cfg.cf_worker_domains.clone());
 
-    let proxy_primary = cfg.cf_proxy_domains.first().cloned().unwrap_or_default();
-    set_cf_proxy_domain(proxy_primary);
     set_proxy_domains(cfg.cf_proxy_domains.clone());
-}
-
-pub async fn reload_from_env() {
-    let cfg = load_from_env();
-    apply_config(&cfg);
-    if cfproxy_auto_enabled() {
-        if cfg.cf_proxy_domains.is_empty() {
-            seed_default_cfproxy_domains();
-        }
-        refresh_cfproxy_domains().await;
-    }
-    ip_fail::reset_all();
-    ws_pool::reset_pools().await;
-    cf_worker_pool::reset_pools().await;
-    ws_pool::warmup_pools();
-    cf_worker_pool::warmup_pools();
-    log::info!(
-        "config reloaded: front-ip={} front-dcs={:?} dc-overrides={} cf-workers={} cf-proxies={}",
-        cfg.front_ip,
-        cfg.front_dcs,
-        cfg.dc_front_ips.len(),
-        cfg.cf_worker_domains.len(),
-        cfg.cf_proxy_domains.len()
-    );
 }
 
 #[cfg(test)]
@@ -188,5 +152,6 @@ mod tests {
         assert!(parse_front_dcs("none").is_empty());
         assert!(parse_front_dcs("").is_empty());
         assert_eq!(parse_front_dcs("2,2,4"), vec![2, 4]); // dedup
+        assert_eq!(parse_front_dcs("0,2,6,203"), vec![2, 203]);
     }
 }
