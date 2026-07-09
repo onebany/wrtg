@@ -1,5 +1,7 @@
 # Архитектура wrtg
 
+**Last updated:** 2026-07-09
+
 **wrtg** — прозрачный прокси Telegram для OpenWrt. Роутер перехватывает TCP-трафик к IP Telegram через **DNAT** (без kernel TPROXY), демон слушает `:8443` с `IP_TRANSPARENT` и восстанавливает оригинальный адрес через **`SO_ORIGINAL_DST`**. Для MTProto строит direct-bridge: расшифровывает obfuscated2 handshake клиента, генерирует relay-init, шифрует трафик в обе стороны и подключается к Telegram через **WSS** (`kws{N}.web.telegram.org`) или **TCP fallback** на `FRONT_IP`.
 
 ---
@@ -57,7 +59,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Start(["Новое TCP-соединение\nна :8443"]) --> Tune["tune_tcp\nnodelay + 256KB буферы"]
+    Start(["Новое TCP-соединение\nна :8443"]) --> Tune["tune_tcp\nnodelay + 512KB буферы"]
     Tune --> OrigDst["get_original_dst\nSO_ORIGINAL_DST\n→ orig_ip:orig_port"]
     OrigDst --> ReadInit["read_client_init\nдо 4096 байт, timeout 750ms"]
 
@@ -81,7 +83,8 @@ flowchart TD
     Blacklist -->|"нет"| IpFailCheck
     IpFailCheck{"ip_fail_until\n(target IP)?"}
     IpFailCheck -->|"да"| SkipWS["пропуск direct WS"]
-    IpFailCheck -->|"нет"| PoolTry["ws_pool::acquire\n(dc, media)"]
+    IpFailCheck -->|"нет, non-media"| PoolTry["ws_pool::acquire\n(dc, non-media)"]
+    IpFailCheck -->|"нет, media"| WSTry
     PoolTry -->|"есть"| PoolBridge["relay_init → bridge_ws"]
     PoolBridge --> Done
     PoolTry -->|"нет"| WSTry["try_ws_bridge\n(новое подключение)"]
@@ -144,12 +147,12 @@ flowchart TD
 | Media DC (`dc_idx < 0` в handshake) | `kws{N}-1.web.telegram.org`, приоритет orig CDN IP |
 | Все WS → HTTP 302 | DC помечается в `ws_blacklist` с TTL, WS пропускается до истечения |
 | WS timeout к FRONT_IP | `ip_fail_until` — пропуск direct WS на cooldown |
-| Пул WS готов | `acquire(dc, media)` — мгновенный bridge без нового handshake |
+| Direct WS pool готов (non-media) | `acquire(dc, false)` — мгновенный bridge без нового TLS handshake |
 | CF Worker / CF Proxy | Fallback после direct WS: Worker pool → Worker → Proxy balancer |
 | Media + WS blacklist | TCP fallback через front IP (не blind relay к CDN) |
 | `web.telegram.org` / `*.telesco.pe` в SNI | Passthrough на `FRONT_IP`, ClientHello не меняется |
 | Media CDN HTTP :80 | Переписывается заголовок `Host` → `kws{N}-1.web.telegram.org` |
-| Passthrough + Worker задан (v0.4.3+) | Туннель raw байт через Worker к `orig_ip:orig_port` (media/emoji к real DC); fallback на front |
+| Passthrough + Worker задан | Туннель raw байт через Worker к разрешённому Telegram `orig_ip:orig_port`; optional secret header |
 | Handshake с DC в пакете (v0.4.4) | `dc_learn::learn(orig_ip, dc, media)` → persist в `dc-ips-learned.txt` |
 | Handshake без DC (v0.4.4) | `dc_from_orig_dst` = hardcoded → `dc_learn::lookup` → иначе blind_relay |
 
@@ -164,7 +167,7 @@ flowchart TB
     subgraph Main["main.rs"]
         CLI["CLI: --listen, --front-ip\nenv + config.rs"]
         Accept["accept loop + watchdog"]
-        Handle["handle_conn → handle_handshake\nSIGHUP reload"]
+        Handle["handle_conn → handle_handshake\nconfig at startup"]
     end
 
     subgraph Sockopt["sockopt/"]
@@ -350,7 +353,7 @@ flowchart TB
 
 **wrtg** решает задачу прозрачного обхода блокировок Telegram на уровне роутера: клиентам не нужно настраивать прокси. Весь TCP-трафик к подсетям Telegram (из официального CIDR-списка) перенаправляется DNAT-правилами nftables на локальный демон. Демон слушает порт `8443` с флагом `IP_TRANSPARENT` и через `SO_ORIGINAL_DST` узнаёт, к какому IP и порту Telegram клиент изначально обращался — это критично для определения дата-центра (DC1–DC5, DC203) и типа соединения (обычный или media).
 
-При получении соединения демон читает первые байты и классифицирует трафик. Если это TLS (браузер `web.telegram.org`) или HTTP — выполняется **blind relay**: соединение пробрасывается на `FRONT_IP` (`149.154.167.220` по умолчанию) с сохранением оригинального ClientHello или с переписыванием HTTP `Host` для media CDN. Если это MTProto obfuscated2 (64-байтный handshake) — демон расшифровывает его, строит криптоконтекст из четырёх AES-256-CTR потоков и пытается подключиться к Telegram через WebSocket (`wss://FRONT_IP:443`, Host: `kws{N}.web.telegram.org` или `kws{N}-1.web.telegram.org`, путь `/apiws`). Сначала проверяется **пул предустановленных WS** (`ws_pool`): при наличии готового соединения relay-init отправляется сразу. При неудаче WS (включая HTTP 302 от блокировки) — TCP fallback на `:443`, затем снова blind relay. DC, получившие только 302 на все WS-домены, попадают в runtime-blacklist с настраиваемым TTL и дальше сразу идут на TCP.
+При получении соединения демон классифицирует первые байты как TLS, HTTP или MTProto obfuscated2. TLS/HTTP сначала туннелируется через настроенный Worker к оригинальному Telegram IP, затем при необходимости идёт через blind relay. Для MTProto демон строит криптоконтекст из четырёх AES-256-CTR потоков и проходит цепочку: direct WS pool → direct WS → CF Worker pool/direct → опциональный CF Proxy → TCP → blind relay. Все исходящие WSS/HTTPS соединения проверяют TLS-сертификат и WebSocket upgrade.
 
 ### WS split read/write
 
@@ -358,7 +361,7 @@ flowchart TB
 
 ### WS connection pool
 
-Модуль `ws_pool.rs` при старте (`warmup_pools`) и каждые 30 с (`start_refill_task`) поддерживает пул готовых WSS-соединений per `(DC, media)` на `FRONT_IP`. Размер пула и TTL задаются env-переменными. После использования соединения из пула вызывается `schedule_refill` для пополнения.
+`ws_pool.rs` поддерживает non-media WSS только для DC с front target. `cf_worker_pool.rs` имеет общий лимит per `(DC, media)` через все Worker-домены — число Worker больше не умножает размер пула. Одностороннее закрытие любой relay-сессии отменяет второе направление.
 
 Развёртывание автоматизировано скриптом `install.sh`: бинарник, конфиг `/etc/wrtg/config`, nft-правила, procd-сервис и ежедневное обновление CIDR. Важное ограничение: wrtg покрывает только **TCP** (сигналинг MTProto, web, media HTTP). Голосовые и видеозвонки используют **UDP/WebRTC** (рефлекторы `91.108.x.x`, порты 596–599, STUN 3478) — это **вне scope** wrtg; UDP не проксируется.
 
@@ -376,8 +379,9 @@ flowchart TB
 | DNAT ports | 80, 443, 5222 |
 | nft table | `inet tg_tproxy` |
 | Handshake size | 64 bytes (obfuscated2) |
-| WS pool size (default) | 2 per (DC, media), max 8 |
+| WS pool size (default) | 2 per fronted non-media DC, max 8 |
 | WS pool TTL (default) | 120 s |
+| CF Worker pool size | 2 total per (DC, media), max 4 |
 | WS blacklist TTL (default) | 2700 s (45 min) |
 | Pool refill interval | 30 s |
 
@@ -391,7 +395,7 @@ flowchart TB
 | Настройка клиента | `tg://proxy?...` | Не нужна |
 | MTProxy-слой | Да (ee-secret) | Нет |
 | Fallback chain | CF Worker → CF Proxy → Direct WS → TCP | skip WS → pool WS → direct WS → CF Worker pool → CF Proxy → TCP → blind relay |
-| Пул соединений | `ws_pool`, `cf_worker_pool` | `ws_pool`, `cf_worker_pool` (DC1–5, media/normal) |
+| Пул соединений | `ws_pool`, `cf_worker_pool` | direct non-media pool + Worker pool per (DC, media) |
 | Per-DC blacklist | — | `ws_blacklist` с TTL (HTTP 302) |
 | Per-DC front IP | `dc_redirects` | `DC{N}_FRONT_IP` / `WRTG_DC_IPS` + global `FRONT_IP` |
 | ip_fail cooldown | `ip_fail_until` | `ip_fail_until` (`WRTG_IP_FAIL_COOLDOWN_SEC`) |
@@ -409,17 +413,19 @@ flowchart TB
 | `WRTG_DC_IPS` | Per-DC overrides: `1:ip,2:ip` | — |
 | `TG_TPROXY_FRONT_IP` | Legacy alias для front IP | — |
 | `CF_WORKER_DOMAIN` | Cloudflare Worker (через запятую) | пусто |
+| `WRTG_CF_WORKER_TOKEN` | Secret для header `X-WRTG-Token` | пусто |
 | `CF_PROXY_DOMAIN` | Cloudflare-proxied домен (через запятую) | пусто |
+| `WRTG_CFPROXY_AUTO` | Opt-in публичного CF Proxy pool | `0` |
 | `WRTG_NO_CFPROXY` | Отключить CF fallback | выкл |
 | `WRTG_NO_WORKER_PASSTHROUGH` | Не туннелировать media passthrough через Worker | выкл |
 | `WRTG_DC_LEARN_FILE` | Persist-файл learned IP→DC | `/etc/wrtg/dc-ips-learned.txt` |
 | `WRTG_DC_IPS_FILE` | Админский IP→DC файл (загрузка при старте) | `/etc/wrtg/dc-ips.txt` |
 | `WRTG_IP_FAIL_COOLDOWN_SEC` | Cooldown после WS timeout к front IP | `3600` |
-| `WRTG_WS_POOL_SIZE` | Размер пула WS per (DC, media) | `2` (max 8) |
+| `WRTG_WS_POOL_SIZE` | Direct non-media pool per fronted DC | `2` (max 8) |
 | `WRTG_WS_POOL_TTL_SEC` | TTL соединений в пуле | `120` |
-| `WRTG_CF_WORKER_POOL_SIZE` | Размер CF Worker pool per DC | `2` (max 4) |
+| `WRTG_CF_WORKER_POOL_SIZE` | Общий Worker pool per (DC, media) | `2` (max 4) |
 | `WRTG_CF_WORKER_POOL_TTL_SEC` | TTL CF Worker pool | `120` |
 | `WRTG_WS_BLACKLIST_TTL_SEC` | TTL blacklist после HTTP 302 | `2700` |
 | `WRTG_LISTEN` | Listen address override | `0.0.0.0:8443` |
 
-CLI: `--listen ADDR`, `--front-ip IP`. SIGHUP (`/etc/init.d/wrtg reload`) перечитывает env без рестарта.
+CLI: `--listen ADDR`, `--front-ip IP`. `/etc/init.d/wrtg reload` выполняет restart, потому что окружение запущенного процесса изменить нельзя.

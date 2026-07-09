@@ -30,6 +30,7 @@ const WS_CHANNEL_CAP: usize = 256;
 const WS_SEND_BATCH_MAX: usize = 32;
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_CF_PROXY_ATTEMPTS: usize = 3;
 
 pub async fn bridge_ws(
     client: PrefixedStream,
@@ -100,7 +101,7 @@ pub async fn bridge_ws(
 
     let send_tx_up = send_tx.clone();
     let mut splitter = splitter;
-    let up = tokio::spawn(async move {
+    let mut up = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match client_read.read(&mut buf).await {
@@ -131,7 +132,7 @@ pub async fn bridge_ws(
         }
     });
 
-    let down = tokio::spawn(async move {
+    let mut down = tokio::spawn(async move {
         while let Some(payload) = recv_rx.recv().await {
             let out = down_crypto.telegram_to_client(&payload);
             if client_write.write_all(&out).await.is_err() {
@@ -140,9 +141,25 @@ pub async fn bridge_ws(
         }
     });
 
-    let _ = tokio::join!(up, down);
+    let up_finished = tokio::select! {
+        _ = &mut up => {
+            down.abort();
+            true
+        },
+        _ = &mut down => {
+            up.abort();
+            false
+        },
+    };
     drop(send_tx);
     drop(pong_tx);
+    ws_send_driver.abort();
+    ws_recv_driver.abort();
+    if up_finished {
+        let _ = down.await;
+    } else {
+        let _ = up.await;
+    }
     let _ = ws_send_driver.await;
     let _ = ws_recv_driver.await;
     log::info!("[{label_down}] {dc_tag} WS session closed{media_tag}");
@@ -153,7 +170,7 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
     let (mut rr, mut rw) = remote.into_split();
     let (mut up_crypto, mut down_crypto) = ctx.split();
 
-    let up = tokio::spawn(async move {
+    let mut up = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match cr.read(&mut buf).await {
@@ -170,7 +187,7 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
         let _ = rw.shutdown().await;
     });
 
-    let down = tokio::spawn(async move {
+    let mut down = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match rr.read(&mut buf).await {
@@ -187,7 +204,21 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
         let _ = cw.shutdown().await;
     });
 
-    let _ = tokio::join!(up, down);
+    let up_finished = tokio::select! {
+        _ = &mut up => {
+            down.abort();
+            true
+        },
+        _ = &mut down => {
+            up.abort();
+            false
+        },
+    };
+    if up_finished {
+        let _ = down.await;
+    } else {
+        let _ = up.await;
+    }
     log::info!("[{label}] TCP fallback session closed");
 }
 
@@ -208,7 +239,7 @@ async fn try_ws_with_domains(
     relay_init: &[u8],
     label: &str,
     dc: i32,
-) -> Result<RawWebSocket, (bool, bool)> {
+) -> Result<(RawWebSocket, String), (bool, bool)> {
     let mut all_blocked = true;
     let mut timed_out = false;
 
@@ -243,7 +274,7 @@ async fn try_ws_with_domains(
                     all_blocked = false;
                     continue;
                 }
-                return Ok(ws);
+                return Ok((ws, domain.clone()));
             }
         }
     }
@@ -280,25 +311,13 @@ pub async fn try_ws_bridge(
                         hs.dc,
                         pooled.domain
                     );
-                    bridge_ws(
-                        client,
-                        pooled.ws,
-                        ctx,
-                        splitter,
-                        label,
-                        hs.dc,
-                        hs.is_media,
-                    )
-                    .await;
+                    bridge_ws(client, pooled.ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                     schedule_refill(hs.dc, hs.is_media, target_ip.clone());
                     return WsBridgeResult::Connected;
                 }
                 Err(e) => {
                     pooled.ws.close().await;
-                    log::warn!(
-                        "[{label}] DC{} pooled WS relay init failed: {e}",
-                        hs.dc
-                    );
+                    log::warn!("[{label}] DC{} pooled WS relay init failed: {e}", hs.dc);
                 }
             }
         }
@@ -307,12 +326,12 @@ pub async fn try_ws_bridge(
     let domains = ws_domains(hs.dc, hs.is_media);
     let (all_blocked, timed_out) =
         match try_ws_with_domains(&target_ip, &domains, relay_init, label, hs.dc).await {
-            Ok(ws) => {
+            Ok((ws, connected_domain)) => {
                 clear_ip_fail(&target_ip, hs.dc);
                 log::info!(
                     "[{label}] DC{} -> WS connected via {}",
                     hs.dc,
-                    domains.first().unwrap_or(&String::new())
+                    connected_domain
                 );
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 schedule_refill(hs.dc, hs.is_media, target_ip);
@@ -373,16 +392,7 @@ pub async fn try_cf_fallback(
                     hs.dc,
                     pooled.worker
                 );
-                bridge_ws(
-                    client,
-                    pooled.ws,
-                    ctx,
-                    splitter,
-                    label,
-                    hs.dc,
-                    hs.is_media,
-                )
-                .await;
+                bridge_ws(client, pooled.ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 schedule_cf_refill(hs.dc, hs.is_media, orig_ip.to_string());
                 return CfBridgeResult::Connected;
             }
@@ -411,7 +421,10 @@ pub async fn try_cf_fallback(
                     log::warn!("[{label}] DC{} CF worker relay init failed: {e}", hs.dc);
                     continue;
                 }
-                log::info!("[{label}] DC{} -> WS connected via CF worker {worker}", hs.dc);
+                log::info!(
+                    "[{label}] DC{} -> WS connected via CF worker {worker}",
+                    hs.dc
+                );
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 schedule_cf_refill(hs.dc, hs.is_media, orig_ip.to_string());
                 return CfBridgeResult::Connected;
@@ -426,7 +439,10 @@ pub async fn try_cf_fallback(
     }
 
     // CF Proxy balancer
-    for cf_domain in proxy_domains_for_dc(hs.dc) {
+    for cf_domain in proxy_domains_for_dc(hs.dc)
+        .into_iter()
+        .take(MAX_CF_PROXY_ATTEMPTS)
+    {
         log::info!("[{label}] DC{} -> trying CF proxy {cf_domain}", hs.dc);
         match timeout(
             CF_CONNECT_TIMEOUT,
@@ -440,7 +456,10 @@ pub async fn try_cf_fallback(
                     log::warn!("[{label}] DC{} CF proxy relay init failed: {e}", hs.dc);
                     continue;
                 }
-                log::info!("[{label}] DC{} -> WS connected via CF proxy {cf_domain}", hs.dc);
+                log::info!(
+                    "[{label}] DC{} -> WS connected via CF proxy {cf_domain}",
+                    hs.dc
+                );
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 return CfBridgeResult::Connected;
             }
@@ -500,15 +519,24 @@ pub async fn try_tcp_fallback(
 
 /// Raw byte tunnel between the client and a CF Worker WS (no MTProto crypto).
 /// Used to passthrough TLS / MTProto-over-HTTP media to a blocked DC's real IP.
-async fn relay_via_worker(client: TcpStream, ws: RawWebSocket, initial: &[u8], label: &str) {
+async fn relay_via_worker(
+    client: TcpStream,
+    ws: RawWebSocket,
+    initial: &[u8],
+    label: &str,
+    worker: &str,
+    orig_ip: &str,
+    port: u16,
+) -> Result<(), TcpStream> {
     let mut ws = ws;
     if !initial.is_empty() {
         if let Err(e) = ws.send(initial).await {
             ws.close().await;
             log::warn!("[{label}] worker passthrough initial send failed: {e}");
-            return;
+            return Err(client);
         }
     }
+    log::info!("[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}");
 
     let (mut ws_read, mut ws_write) = ws.into_halves();
     let (mut cr, mut cw) = client.into_split();
@@ -561,6 +589,7 @@ async fn relay_via_worker(client: TcpStream, ws: RawWebSocket, initial: &[u8], l
     }
     let _ = writer.await;
     log::info!("[{label}] worker passthrough session closed");
+    Ok(())
 }
 
 /// Try to passthrough via the CF Worker (raw tunnel to `orig_ip:orig_port`).
@@ -577,6 +606,7 @@ async fn try_worker_passthrough(
     initial: &[u8],
     label: &str,
 ) -> Result<(), TcpStream> {
+    let mut client = client;
     if orig_ip.is_empty() {
         return Err(client);
     }
@@ -606,9 +636,13 @@ async fn try_worker_passthrough(
         .await
         {
             Ok(Ok(ws)) => {
-                log::info!("[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}");
-                relay_via_worker(client, ws, initial, label).await;
-                return Ok(());
+                match relay_via_worker(client, ws, initial, label, worker, orig_ip, port).await {
+                    Ok(()) => return Ok(()),
+                    Err(returned_client) => {
+                        client = returned_client;
+                        continue;
+                    }
+                }
             }
             Ok(Err(e)) => {
                 log::warn!("[{label}] worker passthrough {worker} -> {orig_ip}:{port} failed: {e}");

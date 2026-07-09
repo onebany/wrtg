@@ -35,5 +35,11 @@ rm -f /usr/sbin/wrtg "$INITD"
 rm -rf "$ETC"
 rm -f /etc/nftables.d/wrtg.nft
 rm -rf /var/lib/wrtg
+rm -rf /usr/share/ucode/luci/template/wrtg
+rm -f /usr/share/luci/menu.d/luci-app-wrtg.json
+rm -f /usr/share/rpcd/acl.d/luci-app-wrtg.json
+rm -rf /tmp/luci-* /tmp/luci-indexcache 2>/dev/null || true
+/etc/init.d/rpcd restart 2>/dev/null || true
+/etc/init.d/uhttpd restart 2>/dev/null || true
 
 echo "wrtg uninstalled."

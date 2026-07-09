@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::sync::{LazyLock, RwLock};
 
 use crate::mtproto::{dc_from_hardcoded, valid_dc};
@@ -47,8 +48,7 @@ fn parse_line(line: &str) -> Option<(String, i32, bool)> {
     }
     let mut it = line.split_whitespace();
     let ip = it.next()?;
-    // Cheap IPv4 sanity check (4 dotted octets); avoids poisoning the map with junk.
-    if ip.split('.').filter(|o| o.parse::<u8>().is_ok()).count() != 4 {
+    if ip.parse::<Ipv4Addr>().is_err() {
         return None;
     }
     let dc = it.next()?.parse::<i32>().ok()?;
@@ -64,21 +64,21 @@ fn parse_line(line: &str) -> Option<(String, i32, bool)> {
 
 /// Load the admin-editable and persisted-learned files into the in-memory map.
 /// Call once at startup. The learned file wins over the manual file on conflict
-/// (it reflects what was actually observed on the wire).
+/// The admin file wins over learned data so operators can correct a mapping.
 pub fn load() {
     let mut map = LEARNED.write().unwrap();
-    let mut n = 0usize;
-    for path in [manual_file(), learn_file()] {
+    map.clear();
+    for path in [learn_file(), manual_file()] {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
         for line in content.lines() {
             if let Some((ip, dc, media)) = parse_line(line) {
                 map.insert(ip, (dc, media));
-                n += 1;
             }
         }
     }
+    let n = map.len();
     if n > 0 {
         log::info!("dc_learn: loaded {n} IP->DC mapping(s)");
     }
@@ -99,8 +99,8 @@ pub fn learn(ip: &str, dc: i32, is_media: bool) {
     }
     {
         // Fast path: already known with the same DC — nothing to do.
-        if let Some(&(d, _)) = LEARNED.read().unwrap().get(ip) {
-            if d == dc {
+        if let Some(&(d, media)) = LEARNED.read().unwrap().get(ip) {
+            if d == dc && media == is_media {
                 return;
             }
         }
@@ -108,7 +108,7 @@ pub fn learn(ip: &str, dc: i32, is_media: bool) {
     let is_new = {
         let mut map = LEARNED.write().unwrap();
         match map.get(ip) {
-            Some(&(d, _)) if d == dc => false,
+            Some(&(d, media)) if d == dc && media == is_media => false,
             _ => {
                 map.insert(ip.to_string(), (dc, is_media));
                 true
@@ -143,6 +143,9 @@ pub fn len() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_variants() {
@@ -159,10 +162,13 @@ mod tests {
         assert_eq!(parse_line("garbage"), None);
         assert_eq!(parse_line("1.2.3.4 99"), None); // invalid dc
         assert_eq!(parse_line("not.an.ip 2"), None);
+        assert_eq!(parse_line("1.2.3.4.5 2"), None);
+        assert_eq!(parse_line("1.2.bad.3.4 2"), None);
     }
 
     #[test]
     fn learn_and_lookup() {
+        let _guard = TEST_LOCK.lock().unwrap();
         // Use an IP not in the hardcoded tables.
         let ip = "203.0.113.7";
         std::env::set_var("WRTG_DC_LEARN_FILE", "/dev/null");
@@ -177,6 +183,7 @@ mod tests {
 
     #[test]
     fn hardcoded_ip_not_learned() {
+        let _guard = TEST_LOCK.lock().unwrap();
         // 149.154.171.255 is in the hardcoded alt table -> learn() must skip it,
         // leaving no learned entry (hardcoded path already resolves it).
         std::env::set_var("WRTG_DC_LEARN_FILE", "/dev/null");

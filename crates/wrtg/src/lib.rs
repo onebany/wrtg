@@ -11,14 +11,12 @@ pub mod media;
 pub mod mtproto;
 pub mod sockopt;
 pub mod splitter;
+pub mod tls;
 pub mod tls_sni;
 pub mod watchdog;
 pub mod ws;
 pub mod ws_blacklist;
 pub mod ws_pool;
 
-pub use config::{apply_config, load_from_env, reload_from_env, WrtgConfig};
-pub use mtproto::{
-    cf_proxy_domain, cf_worker_domain, dc_front_ip, front_ip, set_cf_proxy_domain,
-    set_cf_worker_domain, set_dc_front_ip, set_dc_front_ips, set_front_ip,
-};
+pub use config::{apply_config, load_from_env, WrtgConfig};
+pub use mtproto::{dc_front_ip, front_ip, set_dc_front_ip, set_dc_front_ips, set_front_ip};

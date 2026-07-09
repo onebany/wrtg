@@ -8,8 +8,10 @@ static WORKER_DOMAINS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::ne
 static PROXY_DOMAINS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static WORKER_RR: AtomicUsize = AtomicUsize::new(0);
 static PROXY_RR: AtomicUsize = AtomicUsize::new(0);
-static DC_WORKER_IDX: LazyLock<Mutex<HashMap<i32, usize>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-static DC_PROXY_IDX: LazyLock<Mutex<HashMap<i32, usize>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static DC_WORKER_IDX: LazyLock<Mutex<HashMap<i32, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static DC_PROXY_IDX: LazyLock<Mutex<HashMap<i32, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn set_worker_domains(domains: Vec<String>) {
     *WORKER_DOMAINS.lock().unwrap() = domains;

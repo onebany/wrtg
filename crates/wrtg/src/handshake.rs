@@ -142,12 +142,8 @@ fn find_handshake_offset(buf: &[u8]) -> Option<usize> {
     if buf.len() < HANDSHAKE_LEN {
         return None;
     }
-    for off in 0..=buf.len() - HANDSHAKE_LEN {
-        if parse_direct_handshake(&buf[off..off + HANDSHAKE_LEN]).is_ok() {
-            return Some(off);
-        }
-    }
-    None
+    (0..=buf.len() - HANDSHAKE_LEN)
+        .find(|&off| parse_direct_handshake(&buf[off..off + HANDSHAKE_LEN]).is_ok())
 }
 
 fn has_complete_http_headers(data: &[u8]) -> bool {

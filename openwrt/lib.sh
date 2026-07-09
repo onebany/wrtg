@@ -3,17 +3,17 @@
 
 CONFIG="${WRTG_CONFIG:-/etc/wrtg/config}"
 CIDR_FILE="${WRTG_CIDR_FILE:-/var/lib/wrtg/cidrs.txt}"
+# shellcheck disable=SC2034 # consumed by update-cidr.sh after sourcing
 CIDR_EXTRA="${WRTG_CIDR_EXTRA:-/etc/wrtg/cidr-extra.txt}"
-CALLS_ZAPRET_BYPASS_FLAG="${WRTG_CALLS_BYPASS_FLAG:-/var/lib/wrtg/calls-zapret-bypass}"
-CALLS_NFT_COMMENT='wrtg-calls'
 
 load_config() {
 	ROUTER_IP=""
-	LAN_IF="eth0"
+	LAN_IF=""
 	LISTEN="0.0.0.0:8443"
 	FRONT_IP="149.154.167.220"
 	WRTG_FRONT_DCS=""
 	CF_WORKER_DOMAIN=""
+	WRTG_CF_WORKER_TOKEN=""
 	CF_PROXY_DOMAIN=""
 	WRTG_DC_IPS=""
 	WRTG_DC_LEARN_FILE=""
@@ -42,6 +42,7 @@ load_config() {
 	FRONT_IP=$(printf '%s' "$FRONT_IP" | tr -d '\r')
 	WRTG_FRONT_DCS=$(printf '%s' "$WRTG_FRONT_DCS" | tr -d '\r')
 	CF_WORKER_DOMAIN=$(printf '%s' "$CF_WORKER_DOMAIN" | tr -d '\r')
+	WRTG_CF_WORKER_TOKEN=$(printf '%s' "$WRTG_CF_WORKER_TOKEN" | tr -d '\r')
 	CF_PROXY_DOMAIN=$(printf '%s' "$CF_PROXY_DOMAIN" | tr -d '\r')
 	WRTG_CFPROXY_AUTO=$(printf '%s' "$WRTG_CFPROXY_AUTO" | tr -d '\r')
 	WRTG_DC_IPS=$(printf '%s' "$WRTG_DC_IPS" | tr -d '\r')
@@ -58,10 +59,24 @@ load_config() {
 	CIDR_URL=$(printf '%s' "$CIDR_URL" | tr -d '\r')
 	CIDR_UPDATE_HOUR=$(printf '%s' "$CIDR_UPDATE_HOUR" | tr -d '\r')
 
-	if [ -z "$ROUTER_IP" ]; then
-		ROUTER_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+	if [ -z "$LAN_IF" ]; then
+		LAN_IF="$(uci -q get network.lan.device 2>/dev/null || true)"
+		[ -n "$LAN_IF" ] || LAN_IF="$(uci -q get network.lan.ifname 2>/dev/null | awk '{print $1}')"
+		[ -n "$LAN_IF" ] || {
+			ip link show br-lan >/dev/null 2>&1 && LAN_IF="br-lan" || LAN_IF="eth0"
+		}
 	fi
-	[ -n "$ROUTER_IP" ] || ROUTER_IP="127.0.0.1"
+
+	if [ -z "$ROUTER_IP" ]; then
+		ROUTER_IP="$(
+			ip -4 addr show dev "$LAN_IF" 2>/dev/null |
+				awk '/inet / { split($2, a, "/"); print a[1]; exit }'
+		)"
+	fi
+	[ -n "$ROUTER_IP" ] || {
+		echo "wrtg: cannot determine LAN IPv4 for $LAN_IF; set ROUTER_IP" >&2
+		return 1
+	}
 
 	case "$LISTEN" in
 		*:*)
@@ -71,6 +86,16 @@ load_config() {
 			LISTEN_PORT="$LISTEN"
 			;;
 	esac
+	case "$LISTEN_PORT" in
+		''|*[!0-9]*)
+			echo "wrtg: invalid LISTEN port: $LISTEN" >&2
+			return 1
+			;;
+	esac
+	[ "$LISTEN_PORT" -ge 1 ] 2>/dev/null && [ "$LISTEN_PORT" -le 65535 ] || {
+		echo "wrtg: LISTEN port out of range: $LISTEN_PORT" >&2
+		return 1
+	}
 }
 
 default_cidrs() {
@@ -88,9 +113,26 @@ default_cidrs() {
 EOF
 }
 
+valid_ipv4_cidrs() {
+	awk -F'[./]' '
+		NF == 5 {
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) next
+			}
+			if ($5 !~ /^[0-9]+$/ || $5 < 0 || $5 > 32) next
+			print $0
+		}
+	'
+}
+
 load_cidrs() {
 	if [ -s "$CIDR_FILE" ]; then
-		grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' "$CIDR_FILE"
+		_valid_cidrs="$(valid_ipv4_cidrs < "$CIDR_FILE")"
+		if [ -n "$_valid_cidrs" ]; then
+			printf '%s\n' "$_valid_cidrs"
+		else
+			default_cidrs
+		fi
 	else
 		default_cidrs
 	fi
@@ -111,58 +153,3 @@ nft_cidr_inline() {
 	done | sed 's/, $//'
 }
 
-_calls_bypass_delete_rules() {
-	chain="$1"
-	nft -a list chain inet zapret2 "$chain" 2>/dev/null | \
-		grep -F "comment \"$CALLS_NFT_COMMENT\"" | \
-		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
-		sort -rn | while read -r h; do
-			[ -n "$h" ] || continue
-			nft delete rule inet zapret2 "$chain" handle "$h" 2>/dev/null || true
-		done
-	# Remove leftover test rules from manual debugging.
-	nft -a list chain inet zapret2 "$chain" 2>/dev/null | \
-		grep -F 'wrtg-calls-test' | \
-		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
-		sort -rn | while read -r h; do
-			[ -n "$h" ] || continue
-			nft delete rule inet zapret2 "$chain" handle "$h" 2>/dev/null || true
-		done
-}
-
-calls_zapret_bypass_remove() {
-	nft list table inet zapret2 >/dev/null 2>&1 || return 0
-	_calls_bypass_delete_rules postnat_hook
-	_calls_bypass_delete_rules prenat_hook
-	nft delete set inet zapret2 tg_calls_cidr 2>/dev/null || true
-}
-
-calls_zapret_bypass_apply() {
-	[ -f "$CALLS_ZAPRET_BYPASS_FLAG" ] || return 0
-	nft list table inet zapret2 >/dev/null 2>&1 || {
-		echo "zapret2 nft table missing; run after zapret2 start" >&2
-		return 1
-	}
-
-	calls_zapret_bypass_remove
-
-	ELEMENTS="$(nft_cidr_inline)"
-	[ -n "$ELEMENTS" ] || return 1
-
-	nft add set inet zapret2 tg_calls_cidr '{ type ipv4_addr; flags interval; }'
-	nft add element inet zapret2 tg_calls_cidr "{ $ELEMENTS }"
-
-	# Outbound call UDP: skip nfqueue (STUN 3478, TURN 596-599, WebRTC ephemerals).
-	nft insert rule inet zapret2 postnat_hook position 0 \
-		oifname @wanif meta nfproto ipv4 ip daddr @tg_calls_cidr \
-		udp dport '{ 3478, 596-599, 50000-65535 }' return \
-		comment \"$CALLS_NFT_COMMENT\"
-
-	# Inbound replies from reflectors.
-	nft insert rule inet zapret2 prenat_hook position 0 \
-		iifname @wanif meta nfproto ipv4 ip saddr @tg_calls_cidr \
-		udp sport '{ 3478, 596-599, 50000-65535 }' return \
-		comment \"$CALLS_NFT_COMMENT\"
-
-	echo "calls zapret bypass: UDP 3478/596-599/50k+ to telegram CIDR skip nfqueue"
-}

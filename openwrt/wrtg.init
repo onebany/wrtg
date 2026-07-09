@@ -1,10 +1,10 @@
 #!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034 # consumed by OpenWrt rc.common
 START=95
 STOP=15
 USE_PROCD=1
 
 BIN=/usr/sbin/wrtg
-CONF=/etc/wrtg/config
 
 . /etc/wrtg/lib.sh
 
@@ -28,8 +28,7 @@ start_service() {
 	# otherwise only the last variable (e.g. WRTG_CF_WORKER_POOL_SIZE) survives
 	# and CF_WORKER_DOMAIN / FRONT_IP never reach the daemon → cf-workers=0.
 	#
-	# FRONT_IP is also exported as env: -front-ip is startup-only CLI, but SIGHUP
-	# reload re-reads env — without this a custom FRONT_IP reverts to default.
+	# Keep the complete startup configuration in the daemon environment.
 	_env_set=0
 	_add_env() {
 		[ -n "$2" ] || return 0
@@ -43,6 +42,7 @@ start_service() {
 	_add_env FRONT_IP "$FRONT_IP"
 	_add_env WRTG_FRONT_DCS "$WRTG_FRONT_DCS"
 	_add_env CF_WORKER_DOMAIN "$CF_WORKER_DOMAIN"
+	_add_env WRTG_CF_WORKER_TOKEN "$WRTG_CF_WORKER_TOKEN"
 	_add_env CF_PROXY_DOMAIN "$CF_PROXY_DOMAIN"
 	_add_env WRTG_CFPROXY_AUTO "$WRTG_CFPROXY_AUTO"
 	_add_env WRTG_DC_IPS "$WRTG_DC_IPS"
@@ -58,6 +58,7 @@ start_service() {
 	_add_env WRTG_WS_BLACKLIST_TTL_SEC "$WRTG_WS_BLACKLIST_TTL_SEC"
 
 	for dc in 1 2 3 4 5 203; do
+		dc_ip=
 		eval "dc_ip=\$DC${dc}_FRONT_IP"
 		_add_env "DC${dc}_FRONT_IP" "$dc_ip"
 	done
@@ -70,11 +71,8 @@ stop_service() {
 }
 
 reload_service() {
-	if pid=$(pidof wrtg 2>/dev/null); then
-		kill -HUP "$pid" 2>/dev/null && echo "wrtg config reloaded (SIGHUP)" || true
-	else
-		echo "wrtg not running" >&2
-	fi
+	echo "wrtg: config changes require a process restart"
+	/etc/init.d/wrtg restart
 }
 
 service_triggers() {

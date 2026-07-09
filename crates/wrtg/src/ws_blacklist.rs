@@ -48,9 +48,7 @@ pub fn mark_ws_blacklisted(dc: i32, is_media: bool) {
     let ttl_secs = blacklist_ttl().as_secs();
     BLACKLIST.lock().unwrap().insert((dc, is_media), expiry);
     let media_tag = if is_media { " media" } else { "" };
-    log::info!(
-        "DC{dc}{media_tag} WS blacklisted for {ttl_secs}s (HTTP 302 on all domains)"
-    );
+    log::info!("DC{dc}{media_tag} WS blacklisted for {ttl_secs}s (HTTP 302 on all domains)");
 }
 
 #[cfg(test)]

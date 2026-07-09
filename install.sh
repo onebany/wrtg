@@ -164,16 +164,17 @@ install_luci_local() {
 # ── daemon (local) ───────────────────────────────────────────────────────────
 install_files() {
 	step "Installing daemon + service files..."
-	mkdir -p "$ETC" /usr/sbin /var/lib/wrtg /etc/nftables.d
+	mkdir -p "$ETC" /usr/sbin /var/lib/wrtg
 	# mv-into-place: overwriting a running binary directly fails with ETXTBSY.
 	install -m 755 "$1" /usr/sbin/wrtg.new && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
-	for f in lib.sh setup-nft.sh update-cidr.sh zapret-telegram-calls.sh calls-debug.sh; do
+	for f in lib.sh setup-nft.sh update-cidr.sh; do
 		install -m 755 "$PKG_DIR/$f" "$ETC/$f"
 	done
 	install -m 644 "$PKG_DIR/cidr-extra.txt" "$ETC/cidr-extra.txt"
+	install -m 644 "$PKG_DIR/cf-worker.js" "$ETC/cf-worker.js"
 	install -m 755 "$PKG_DIR/wrtg.init" "$INITD"
-	install -m 644 "$PKG_DIR/wrtg.nft" /etc/nftables.d/wrtg.nft
 	install -m 644 "$ROOT/VERSION" "$ETC/version"
+	rm -f "$ETC/zapret-telegram-calls.sh" "$ETC/calls-debug.sh" /etc/nftables.d/wrtg.nft
 
 	# IP→DC maps: ship template if missing; always ensure learned file exists.
 	if [ ! -f "$ETC/dc-ips.txt" ] && [ -f "$PKG_DIR/dc-ips.txt" ]; then
@@ -184,9 +185,10 @@ install_files() {
 
 	if [ ! -f "$ETC/config" ]; then
 		render_config > "$ETC/config"
-		chmod 644 "$ETC/config"
+		chmod 600 "$ETC/config"
 		ok "Wrote $ETC/config"
 	else
+		chmod 600 "$ETC/config"
 		ok "Kept existing $ETC/config"
 	fi
 
@@ -254,15 +256,14 @@ install_remote() {
 		BIN="$DIST_DIR/wrtg-linux-$garch"
 		[ -x "$BIN" ] || { [ "$SKIP_BUILD" = "1" ] && die "Binary not found: $BIN"; build_binary "$garch"; }
 		step "Uploading daemon to $ROUTER..."
-		ssh "$ROUTER" "mkdir -p $ETC /var/lib/wrtg /etc/nftables.d"
+		ssh "$ROUTER" "mkdir -p $ETC /var/lib/wrtg"
 		scp -qO "$BIN" "$ROUTER:/usr/sbin/wrtg.new"
-		for f in lib.sh setup-nft.sh update-cidr.sh cidr-extra.txt zapret-telegram-calls.sh calls-debug.sh CfWorker.md; do
+		for f in lib.sh setup-nft.sh update-cidr.sh cidr-extra.txt cf-worker.js; do
 			scp -qO "$PKG_DIR/$f" "$ROUTER:$ETC/$f"
 		done
 		# Seed dc-ips.txt only when missing (don't clobber admin edits).
 		scp -qO "$PKG_DIR/dc-ips.txt" "$ROUTER:$ETC/dc-ips.txt.shipped"
 		scp -qO "$PKG_DIR/wrtg.init" "$ROUTER:$INITD"
-		scp -qO "$PKG_DIR/wrtg.nft" "$ROUTER:/etc/nftables.d/wrtg.nft"
 		scp -qO "$PKG_DIR/config.default" "$ROUTER:$ETC/config.default"
 		render_config | ssh "$ROUTER" "cat > $ETC/config.new"
 		scp -qO "$ROOT/VERSION" "$ROUTER:$ETC/version"
@@ -275,7 +276,9 @@ ETC=/etc/wrtg; INITD=/etc/init.d/wrtg
 # mv-into-place: overwriting the running binary directly fails with ETXTBSY.
 [ -f /usr/sbin/wrtg.new ] && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
 chmod +x /usr/sbin/wrtg "$ETC"/*.sh "$INITD"
+rm -f "$ETC/zapret-telegram-calls.sh" "$ETC/calls-debug.sh" /etc/nftables.d/wrtg.nft
 if [ -f "$ETC/config" ]; then rm -f "$ETC/config.new"; else mv "$ETC/config.new" "$ETC/config"; fi
+chmod 600 "$ETC/config"
 if [ ! -f "$ETC/dc-ips.txt" ] && [ -f "$ETC/dc-ips.txt.shipped" ]; then
 	mv "$ETC/dc-ips.txt.shipped" "$ETC/dc-ips.txt"
 else

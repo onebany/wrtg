@@ -1,7 +1,6 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=wrtg Telegram transparent proxy
-LUCI_DEPENDS:=+wrtg
 LUCI_PKGARCH:=all
 
 include $(TOPDIR)/feeds/luci/luci.mk

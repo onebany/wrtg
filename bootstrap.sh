@@ -7,7 +7,7 @@
 #   wget -qO- https://github.com/OWNER/REPO/raw/main/bootstrap.sh | sh
 #
 # Options (env):
-#   VER=v0.4.3        Install a specific release instead of the latest
+#   VER=v0.5.0        Install a specific release instead of the latest
 #   WRTG_REPO=o/r     Override the GitHub repo (default below)
 #   ASSUME_YES=1      Non-interactive (accept config defaults)
 #   plus any install.sh option: SKIP_LUCI=1, FRONT_IP=, CF_WORKER_DOMAIN=, ...
@@ -26,6 +26,7 @@ if [ "$VER" = "latest" ]; then
 else
 	URL="https://github.com/$REPO/releases/download/$VER/$BUNDLE"
 fi
+CHECKSUM_URL="${URL%/*}/SHA256SUMS"
 
 fetch() { # url dest
 	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
@@ -36,6 +37,12 @@ fetch() { # url dest
 echo "wrtg: downloading $VER bundle from $REPO ..."
 rm -rf "$TMP"; mkdir -p "$TMP"
 fetch "$URL" "$TMP/$BUNDLE" || err "download failed ($URL) - check VER/WRTG_REPO and internet access"
+command -v sha256sum >/dev/null 2>&1 || err "sha256sum is required"
+fetch "$CHECKSUM_URL" "$TMP/SHA256SUMS" || err "checksum download failed"
+EXPECTED="$(awk -v f="$BUNDLE" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
+[ -n "$EXPECTED" ] || err "$BUNDLE missing from SHA256SUMS"
+ACTUAL="$(sha256sum "$TMP/$BUNDLE" | awk '{print $1}')"
+[ "$ACTUAL" = "$EXPECTED" ] || err "bundle checksum mismatch"
 
 tar -xzf "$TMP/$BUNDLE" -C "$TMP" || err "extract failed"
 

@@ -39,8 +39,7 @@ pub fn is_cdn_telegram_host(host: &str) -> bool {
     if host == "telesco.pe" {
         return true;
     }
-    host.ends_with(".telesco.pe")
-        || (host.starts_with("cdn") && host.ends_with(".telegram.org"))
+    host.ends_with(".telesco.pe") || (host.starts_with("cdn") && host.ends_with(".telegram.org"))
 }
 
 pub fn parse_tls_client_hello_sni(data: &[u8]) -> Option<String> {
@@ -71,8 +70,7 @@ fn sni_from_client_hello(payload: &[u8]) -> Option<String> {
     if payload.len() < 4 || payload[0] != 0x01 {
         return None;
     }
-    let hs_len =
-        (payload[1] as usize) << 16 | (payload[2] as usize) << 8 | payload[3] as usize;
+    let hs_len = ((payload[1] as usize) << 16) | ((payload[2] as usize) << 8) | payload[3] as usize;
     if hs_len + 4 > payload.len() {
         return None;
     }

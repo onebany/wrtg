@@ -18,9 +18,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Verify version
+        run: test "$(cat VERSION)" = "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wrtg") | .version')"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy -p wrtg --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test -p wrtg
+
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          shellcheck -x -e SC1091,SC2029 install.sh bootstrap.sh uninstall.sh build-rust.sh openwrt/*.sh openwrt/wrtg.init openwrt/luci-app-wrtg/install-luci.sh
 
   build:
     name: build ${{ matrix.out }}

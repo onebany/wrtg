@@ -9,21 +9,21 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 Подробная архитектура и блок-схемы: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).  
 Дневник разработки и текущее состояние: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-## Возможности (v0.4.4)
+## Возможности (v0.5.0)
 
 - **Прозрачный DNAT** — клиентам не нужен прокси; nftables перенаправляет TCP 80/443/5222 к демону
 - **Direct-bridge MTProto** — расшифровка obfuscated2, relay-init, AES-CTR в обе стороны
 - **WebSocket bridge** — WSS на `FRONT_IP` с Host `kws{N}.web.telegram.org` / `kws{N}-1` (media)
-- **CF fallback chain** — CF Worker pool → CF Proxy balancer → direct WS → TCP → blind relay
+- **Fallback chain** — direct WS pool → direct WS → CF Worker pool/direct → optional CF Proxy → TCP → blind relay
 - **Worker passthrough** — TLS / MTProto-over-HTTP media (emoji/стикеры) через CF Worker к real DC:port
 - **Self-learning IP→DC (`dc_learn`)** — запоминает `orig_ip → DC` из handshake; `/etc/wrtg/dc-ips.txt` + `dc-ips-learned.txt`
-- **WS connection pool** — предустановленные соединения per (DC, media); warmup DC1–5 при старте
-- **cf_worker_pool** — пул WSS через Cloudflare Worker
+- **WS connection pool** — non-media WSS для DC с настроенным front
+- **cf_worker_pool** — общий лимит WSS per (DC, media) через все Worker-домены
 - **TTL blacklist** — DC с HTTP 302 на все WS-домены пропускаются до истечения TTL
 - **ip_fail_until** — cooldown на FRONT_IP после таймаутов WS (пропуск direct WS)
 - **Адаптивный front scope** — `FRONT_IP` применяется только к нужным DC (`WRTG_FRONT_DCS`, по умолчанию `2,4`); остальные идут напрямую / через CF Worker с корректным `dst`
 - **Per-DC FRONT_IP** — `DC{N}_FRONT_IP` / `WRTG_DC_IPS`
-- **Config hot-reload** — `kill -HUP` / `/etc/init.d/wrtg reload`
+- **Предсказуемое применение config** — `/etc/init.d/wrtg restart`; `reload` является безопасным alias
 - **Health watchdog** — пересоздание listener при сбое сокета
 - **TCP fallback** — `:443` на FRONT_IP или media CDN при неудаче WS
 - **Blind relay** — TLS/HTTP passthrough для web.telegram.org и нераспознанного трафика
@@ -34,12 +34,12 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 
 - OpenWrt 23+ / 25+ с **nftables** (`nft`, `kmod-nft-nat`)
 - `curl` или `wget`
-- LAN-интерфейс с доступом клиентов (по умолчанию `eth0`)
+- LAN-интерфейс с доступом клиентов (автоопределение UCI `network.lan` / `br-lan`)
 - **Rust** (rustup) — только если собираете бинарник на ПК (`build-rust.sh` / `install.sh`)
 
 ## Скачать готовый бинарник
 
-Готовые статические бинарники публикуются в [GitHub Releases](https://github.com/homelab/wrtg/releases).
+Готовые статические бинарники публикуются в [GitHub Releases](https://github.com/onebany/wrtg/releases).
 
 | Архитектура роутера | Файл |
 |---------------------|------|
@@ -54,17 +54,17 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 Подставьте нужную версию и архитектуру:
 
 ```bash
-VER=v0.4.4
+VER=v0.5.0
 ARCH=arm64   # amd64 | arm64 | arm
 
-wget -O /tmp/wrtg "https://github.com/homelab/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+wget -O /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
 chmod +x /tmp/wrtg
 ```
 
 Через `curl`:
 
 ```bash
-curl -fsSL -o /tmp/wrtg "https://github.com/homelab/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+curl -fsSL -o /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
 chmod +x /tmp/wrtg
 ```
 
@@ -74,10 +74,10 @@ chmod +x /tmp/wrtg
 
 ```bash
 cd /tmp
-git clone https://github.com/homelab/wrtg.git
+git clone https://github.com/onebany/wrtg.git
 cd wrtg
 mkdir -p dist
-wget -O "dist/wrtg-linux-${ARCH}" "https://github.com/homelab/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+wget -O "dist/wrtg-linux-${ARCH}" "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
 chmod +x "dist/wrtg-linux-${ARCH}"
 SKIP_BUILD=1 sh install.sh
 ```
@@ -141,7 +141,7 @@ ROUTER=root@192.168.1.1 make install
 
 ```bash
 sh build-rust.sh amd64
-ROUTER=root@192.168.20.254 sh deploy-router.sh
+SKIP_BUILD=1 ROUTER=root@192.168.20.254 sh install.sh
 ```
 
 ## Проверка
@@ -160,24 +160,25 @@ nft list table inet tg_tproxy
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `ROUTER_IP` | IP роутера для DNAT | авто (src route) |
-| `LAN_IF` | LAN-интерфейс | `eth0` |
+| `ROUTER_IP` | LAN IP роутера для DNAT | адрес `LAN_IF` |
+| `LAN_IF` | LAN-интерфейс | UCI `network.lan` → `br-lan` → `eth0` |
 | `LISTEN` | Адрес демона | `0.0.0.0:8443` |
 | `FRONT_IP` | Глобальный front IP для WS bridge и TLS passthrough | `149.154.167.220` |
 | `WRTG_FRONT_DCS` | Каким DC применять `FRONT_IP`: `2,4` / `all` / `none` / список. Остальные DC → прямой IP | `2,4` |
 | `DC{N}_FRONT_IP` | Per-DC override (напр. `DC1_FRONT_IP`); всегда важнее `WRTG_FRONT_DCS` | — |
 | `WRTG_DC_IPS` | Per-DC overrides: `1:ip,2:ip` | — |
 | `CF_WORKER_DOMAIN` | Cloudflare Worker — WS fallback (через запятую) | пусто |
+| `WRTG_CF_WORKER_TOKEN` | Secret, совпадающий с Worker secret `WRTG_TOKEN` | пусто |
 | `WRTG_NO_WORKER_PASSTHROUGH` | Не туннелировать media passthrough через Worker (`1`) | выкл |
 | `WRTG_DC_LEARN_FILE` | Файл learned IP→DC (append-only) | `/etc/wrtg/dc-ips-learned.txt` |
 | `WRTG_DC_IPS_FILE` | Админский IP→DC файл | `/etc/wrtg/dc-ips.txt` |
 | `CF_PROXY_DOMAIN` | Cloudflare-proxied домен — WS fallback (через запятую) | пусто → [автопул](docs/CF_PROXY.md) |
-| `WRTG_CFPROXY_AUTO` | Автозагрузка пула CF Proxy с GitHub (`0` — выкл) | `1` если `CF_PROXY_DOMAIN` пуст |
+| `WRTG_CFPROXY_AUTO` | Автозагрузка публичного CF Proxy pool (`1` — вкл) | `0` |
 | `WRTG_NO_CFPROXY` | Отключить CF Worker/Proxy fallback (`1`) | выкл |
 | `WRTG_IP_FAIL_COOLDOWN_SEC` | Cooldown FRONT_IP после WS timeout (сек) | `3600` |
-| `WRTG_WS_POOL_SIZE` | Размер пула предустановленных WS на (DC, media), макс. 8 | `2` |
+| `WRTG_WS_POOL_SIZE` | Non-media direct WS pool per fronted DC, макс. 8 | `2` |
 | `WRTG_WS_POOL_TTL_SEC` | TTL соединений в пуле (сек) | `120` |
-| `WRTG_CF_WORKER_POOL_SIZE` | Размер CF Worker pool per DC, макс. 4 | `2` |
+| `WRTG_CF_WORKER_POOL_SIZE` | Общий Worker pool per (DC, media), макс. 4 | `2` |
 | `WRTG_CF_WORKER_POOL_TTL_SEC` | TTL соединений CF Worker pool (сек) | `120` |
 | `WRTG_WS_BLACKLIST_TTL_SEC` | TTL blacklist DC после HTTP 302 (сек) | `2700` (45 мин) |
 | `CIDR_UPDATE_HOUR` | Час обновления CIDR | `4` |
@@ -187,14 +188,14 @@ nft list table inet tg_tproxy
 После изменений:
 
 ```bash
-/etc/init.d/wrtg reload    # SIGHUP — FRONT_IP, CF-домены, per-DC IP
-/etc/init.d/wrtg restart   # полный рестарт — нужен для пулов/TTL, LISTEN, новых переменных
+/etc/init.d/wrtg restart   # применить изменения daemon config
+/etc/init.d/wrtg reload    # alias для restart
 /etc/wrtg/update-cidr.sh   # только CIDR/nft
 ```
 
 > Размеры/TTL пулов, cooldown и blacklist TTL кешируются при старте — меняются только через `restart`, не `reload`.
 
-CF Worker: [пошаговая настройка](docs/CF_WORKER_SETUP.md) ([код Worker](openwrt/CfWorker.md), [шаблон конфига](openwrt/config.cfworker.template)). CF Proxy: [`openwrt/CfProxy.md`](openwrt/CfProxy.md).
+CF Worker: [пошаговая настройка](docs/CF_WORKER_SETUP.md), исходник [`openwrt/cf-worker.js`](openwrt/cf-worker.js). CF Proxy: [`docs/CF_PROXY.md`](docs/CF_PROXY.md).
 
 ## Удаление
 
@@ -230,4 +231,4 @@ docker/                 # Dockerfile + compose
 
 - **Голосовые/видеозвонки** — wrtg перехватывает только **TCP** (сигналинг). Медиа идёт по **UDP/WebRTC** и **не проксируется**; это вне scope wrtg (интеграция с zapret не планируется).
 - **DC1/DC3/DC5** — при HTTP 302 на direct WS используйте **CF Worker** (`CF_WORKER_DOMAIN`) — нативный fallback wrtg, без zapret.
-- CF Worker / CF Proxy fallback: [`openwrt/CfWorker.md`](openwrt/CfWorker.md), [`openwrt/CfProxy.md`](openwrt/CfProxy.md), [CF_WORKER_SETUP.md](docs/CF_WORKER_SETUP.md).
+- CF Worker / CF Proxy fallback: [CF_WORKER_SETUP.md](docs/CF_WORKER_SETUP.md), [CF_PROXY.md](docs/CF_PROXY.md).

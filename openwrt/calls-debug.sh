@@ -22,10 +22,16 @@ build_filter() {
 		while read -r cidr; do
 			case "$cidr" in
 				\#*|"") continue ;;
-				*/*) net="$net net $cidr" ;;
+				*/*)
+					if [ -n "$net" ]; then
+						net="$net or net $cidr"
+					else
+						net="net $cidr"
+					fi
+					;;
 			esac
 		done < "$CIDR_FILE"
-		echo "udp and (${net# }) and (port 3478 or portrange 596-599 or portrange 50000-65535)"
+		echo "udp and ($net) and (port 3478 or portrange 596-599 or portrange 50000-65535)"
 	else
 		echo 'udp and (net 91.108.0.0/16 or net 149.154.160.0/20) and (port 3478 or portrange 596-599 or portrange 50000-65535)'
 	fi
