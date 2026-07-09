@@ -1,0 +1,38 @@
+---
+description: Синхронизация документации wrtg с кодом после каждого изменения
+globs: crates/wrtg/**
+alwaysApply: true
+---
+
+# Синхронизация документации wrtg
+
+После **любого** изменения кода в `crates/wrtg/` обязательно обновить связанные документы:
+
+## Обязательные файлы
+
+| Изменение | Что обновить |
+|-----------|--------------|
+| Любое изменение в `crates/wrtg/` или `openwrt/` | `.cursor/AI_CONTEXT.md` (локальный, gitignored) — вместе с `docs/DEVELOPMENT.md` и `docs/ARCHITECTURE.md` |
+| Логика bridge/WS/pool/blacklist | `docs/ARCHITECTURE.md` — mermaid-диаграммы потока и компонентов |
+| Новая env-переменная или CLI-флаг | `README.md` (таблица настроек), `openwrt/config.default`, секция H в `ARCHITECTURE.md` |
+| Release-worthy фича | `VERSION`, `crates/wrtg/Cargo.toml` version |
+| Изменение API/поведения | `crates/wrtg/MIGRATION.md` |
+| Пользовательские фичи | `README.md` — список возможностей |
+| Значимое изменение (сессия, фикс, деплой, CF) | `docs/DEVELOPMENT.md` — §1 состояние, §3 история, §5–§7 по необходимости |
+
+## Правила
+
+1. **ARCHITECTURE.md** — mermaid-диаграммы должны отражать актуальный поток: pool → WS → blacklist → CF → TCP → blind relay.
+2. **DEVELOPMENT.md** — после значимых изменений обновить «Текущее состояние», добавить запись в «Историю» и «Дневник»; при новой env — таблицу в §4.
+3. **AI_CONTEXT.md** — `.cursor/AI_CONTEXT.md` (не коммитить): сжатое состояние для AI; обновлять дату `Last updated`; при изменении шаблона — также `.cursor/AI_CONTEXT.example.md`.
+4. **Перед деплоем** — проверить, что все новые `WRTG_*` / `FRONT_IP` env vars задокументированы в README и `openwrt/config.default`.
+5. Не создавать ROADMAP.md без явного запроса.
+6. Версию bump'ить только при значимых изменениях (новые модули, env vars, изменение bridge flow).
+7. **Без zapret** — см. `.cursor/rules/no-zapret.mdc`: не требовать zapret в гайдах, не ссылаться на `zapret-telegram-calls.sh` как обязательный шаг.
+
+## Пример
+
+Добавили `WRTG_WS_FOO_SEC` в код → обновить:
+- `openwrt/config.default` (закомментированная строка + описание)
+- `README.md` (таблица настроек)
+- `docs/ARCHITECTURE.md` (секция H)

@@ -1,0 +1,42 @@
+# Шаблон /etc/wrtg/config с CF Worker
+# Скопируйте на роутер и подставьте свой workers.dev hostname.
+#
+#   scp openwrt/config.cfworker.template root@192.168.20.254:/etc/wrtg/config
+#   ssh root@192.168.20.254 "/etc/init.d/wrtg restart"
+#
+# Подробная инструкция: docs/CF_WORKER_SETUP.md
+
+ROUTER_IP=""
+LAN_IF="eth0"
+LISTEN="0.0.0.0:8443"
+
+# Глобальный front IP для direct WS и TCP fallback
+FRONT_IP="149.154.167.220"
+
+# Per-DC overrides (опционально)
+# DC2_FRONT_IP="149.154.167.151"   # media DC2 на некоторых сетях
+
+# === CF Worker (обязательно для DC1/DC3/DC5 при HTTP 302) ===
+# Замените на ваш hostname из Cloudflare Dashboard (без https://):
+CF_WORKER_DOMAIN="your-worker.username.workers.dev"
+
+# Несколько Worker через запятую:
+# CF_WORKER_DOMAIN="worker1.user.workers.dev,worker2.user.workers.dev"
+
+# CF Proxy (опционально; если пусто — автопул с GitHub, см. docs/CF_PROXY.md):
+# CF_PROXY_DOMAIN="your-domain.example.com"
+# WRTG_CFPROXY_AUTO="0"
+
+# Отключить весь CF fallback (диагностика):
+# WRTG_NO_CFPROXY="1"
+
+# Cooldown после WS timeout к FRONT_IP (секунды)
+# WRTG_IP_FAIL_COOLDOWN_SEC="3600"
+
+# Пулы соединений
+# WRTG_WS_POOL_SIZE="2"
+# WRTG_CF_WORKER_POOL_SIZE="2"
+# WRTG_WS_BLACKLIST_TTL_SEC="2700"
+
+CIDR_URL="https://core.telegram.org/resources/cidr.txt"
+CIDR_UPDATE_HOUR="4"

@@ -1,0 +1,30 @@
+# Reference nftables rules (applied via setup-nft.sh CLI on OpenWrt).
+# DNAT Telegram TCP 80/443/5222 -> local wrtg.
+# Live CIDR list: /var/lib/wrtg/cidrs.txt
+
+table inet tg_tproxy {
+	set telegram_cidr {
+		type ipv4_addr
+		flags interval
+		elements = {
+			91.108.4.0/22,
+			91.108.8.0/22,
+			91.108.12.0/22,
+			91.108.16.0/22,
+			91.108.20.0/22,
+			91.108.56.0/22,
+			91.105.192.0/23,
+			149.154.160.0/20,
+			149.154.176.0/20,
+			185.76.151.0/24,
+		}
+	}
+
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		# Replace eth0 and 192.168.20.254:8443 via /etc/wrtg/config
+		iifname "eth0" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport { 80, 443, 5222 } \
+			dnat ip to 192.168.20.254:8443
+	}
+}

@@ -1,0 +1,71 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test -p wrtg
+
+  build:
+    name: build ${{ matrix.out }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            out: wrtg-linux-amd64
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            out: wrtg-linux-arm64
+          - arch: arm
+            target: armv7-unknown-linux-musleabihf
+            out: wrtg-linux-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build static binary (musl)
+        run: |
+          mkdir -p dist
+          cargo zigbuild --release -p wrtg --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/wrtg" "dist/${{ matrix.out }}"
+          chmod +x "dist/${{ matrix.out }}"
+          file "dist/${{ matrix.out }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          retention-days: 14

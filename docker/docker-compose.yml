@@ -1,0 +1,25 @@
+# wrtg in Docker — dev testing or Linux VPS with manual DNAT.
+#
+# Transparent proxy needs:
+#   - host network (or manual nft/iptables DNAT to the container port)
+#   - CAP_NET_ADMIN for SO_ORIGINAL_DST on Linux
+#
+# On OpenWrt router, run the binary directly (install.sh) — Docker DNAT is impractical.
+
+services:
+  wrtg:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: wrtg:local
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    environment:
+      WRTG_FRONT_IP: "149.154.167.220"
+    command:
+      - -listen
+      - "0.0.0.0:8443"
+      - -front-ip
+      - "149.154.167.220"

@@ -1,0 +1,7 @@
+# Extra Telegram-related CIDRs (one per line, # comments allowed).
+# Merged with https://core.telegram.org/resources/cidr.txt on each update.
+#
+# 91.108.x.x — STUN/reflector UDP (calls); TCP DNAT via wrtg is harmless.
+# Official cidr.txt already includes 91.108.4.0/22 … 91.108.56.0/22.
+# Add here only if official list is missing a subnet:
+# 91.108.32.0/22
