@@ -29,7 +29,7 @@ install-amd64: rust-amd64
 
 bundle: rust
 	mkdir -p bundle/wrtg/dist dist
-	cp -r install.sh bootstrap.sh build-rust.sh VERSION openwrt docs bundle/wrtg/
+	cp -r install.sh bootstrap.sh build-rust.sh VERSION README.md openwrt bundle/wrtg/
 	cp dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm bundle/wrtg/dist/
 	tar -czf dist/wrtg-openwrt.tar.gz -C bundle wrtg
 	cd dist && sha256sum wrtg-linux-* wrtg-openwrt.tar.gz > SHA256SUMS

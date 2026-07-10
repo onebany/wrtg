@@ -113,7 +113,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 			<li>Зарегистрируйтесь (бесплатно) на <code>dash.cloudflare.com</code>.</li>
 			<li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Hello World</b> → <b>Deploy</b>.</li>
 			<li>Откройте <b>Edit code</b>, замените весь шаблон на код Worker для wrtg и нажмите <b>Deploy</b>.
-				Код и полная инструкция: <a href="{{ docs_url }}">Documentation → Guide</a>.</li>
+				Код и полная инструкция: <a href="{{ docs_url }}">Documentation</a>.</li>
 			<li>Скопируйте адрес вида <code>name.username.workers.dev</code> и вставьте в поле ниже.</li>
 			<li>Нажмите <b>Save &amp; Restart</b>. В логах появится <code>WS connected via CF worker</code>.</li>
 		</ol>

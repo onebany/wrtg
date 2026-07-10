@@ -1,15 +1,14 @@
 {#
- wrtg documentation viewer — markdown from /etc/wrtg/docs/
+ wrtg documentation viewer — markdown from /etc/wrtg/README.md
 -#}
 
 {%
 import { readfile } from 'fs';
 
-const DOCS_DIR = '/etc/wrtg/docs';
-const filename = 'GUIDE.md';
-const doctitle = _('Guide');
+const filepath = '/etc/wrtg/README.md';
+const doctitle = _('Documentation');
 
-let content = readfile(DOCS_DIR + '/' + filename);
+let content = readfile(filepath);
 if (!content)
 	content = _('Document not found. Re-run install.sh to deploy documentation.');
 %}

@@ -48,7 +48,7 @@ FRONT_IP="149.154.167.220"
 # ── Cloudflare fallback (DC1/DC3/DC5 HTTP 302 + DC5 emoji CDN) ───────────────
 
 # Cloudflare Worker domain(s) for WS fallback (comma-separated).
-# Setup guide: docs/GUIDE.md  |  source: openwrt/cf-worker.js
+# Setup guide: README.md  |  source: openwrt/cf-worker.js
 # CF_WORKER_DOMAIN="your-worker.username.workers.dev"
 
 # Optional Worker secret. Configure the same value as the Cloudflare Worker
