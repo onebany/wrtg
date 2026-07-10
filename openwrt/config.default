@@ -48,7 +48,6 @@ FRONT_IP="149.154.167.220"
 # ── Cloudflare fallback (DC1/DC3/DC5 HTTP 302 + DC5 emoji CDN) ───────────────
 
 # Cloudflare Worker domain(s) for WS fallback (comma-separated).
-# Native wrtg solution — no zapret required. Restart to apply.
 # Setup guide: docs/GUIDE.md  |  source: openwrt/cf-worker.js
 # CF_WORKER_DOMAIN="your-worker.username.workers.dev"
 
@@ -57,8 +56,8 @@ FRONT_IP="149.154.167.220"
 # WRTG_CF_WORKER_TOKEN="replace-with-a-long-random-value"
 
 # Cloudflare-proxied domain(s) for WS fallback (comma-separated).
-# If unset, wrtg auto-fetches the shared pool from Flowseal/tg-ws-proxy (hourly).
-# Community pool domains may be dead/blocked — prefer CF_WORKER_DOMAIN or your own domain.
+# Public domain pool is opt-in via WRTG_CFPROXY_AUTO (off by default).
+# Prefer CF_WORKER_DOMAIN or your own domain.
 # CF_PROXY_DOMAIN="your-domain.example.com"
 
 # Auto-fetch shared CF Proxy domain pool. Off by default because public pools

@@ -171,7 +171,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		<div class="cbi-value">
 			<label class="cbi-value-title">CF_PROXY_DOMAIN</label>
 			<div class="cbi-value-field"><input type="text" name="CF_PROXY_DOMAIN" value="{{ cfg_val(cfg, 'CF_PROXY_DOMAIN') }}" style="width:30em" />
-				<div class="cbi-value-description">{{ _('Optional CF-proxied domain(s). Empty → auto-pool from GitHub.') }}</div></div>
+				<div class="cbi-value-description">{{ _('Optional CF-proxied domain(s). Public pool is opt-in (WRTG_CFPROXY_AUTO).') }}</div></div>
 		</div>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
