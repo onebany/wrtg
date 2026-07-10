@@ -15,20 +15,19 @@ alwaysApply: true
 |-----------|--------------|
 | Локальный deployment / диагностика | `.cursor/AI_CONTEXT.md` (gitignored) |
 | Логика bridge/WS/pool/blacklist | `docs/GUIDE.md` — mermaid-диаграммы потока и компонентов |
-| Новая env-переменная или CLI-флаг | `README.md` (таблица настроек), `openwrt/config.default`, секция env в `docs/GUIDE.md` |
+| Новая env-переменная или CLI-флаг | `openwrt/config.default`, секция env в `docs/GUIDE.md` |
 | Release-worthy фича | `VERSION`, `crates/wrtg/Cargo.toml` version |
 | Изменение API/поведения | `crates/wrtg/MIGRATION.md` |
-| Пользовательские фичи | `README.md` — список возможностей |
 | Значимое изменение release/process | `docs/GUIDE.md` (секция проверок); история релизов — только `CHANGELOG.md` |
 
 ## Правила
 
 1. **`docs/GUIDE.md`** — единый канонический документ; mermaid-диаграммы должны отражать актуальный поток: pool → WS → blacklist → CF → TCP → blind relay.
-2. **AI_CONTEXT.md** — локальный deployment context; при изменении структуры обновить `.cursor/AI_CONTEXT.example.md`.
-3. **Перед деплоем** — проверить, что все новые `WRTG_*` / `FRONT_IP` env vars задокументированы в README и `openwrt/config.default`.
-4. Не создавать ROADMAP.md без явного запроса.
-5. Версию bump'ить только при значимых изменениях (новые модули, env vars, изменение bridge flow).
-6. **Без zapret** — см. `.cursor/rules/no-zapret.mdc`: не требовать zapret в гайдах, не ссылаться на `zapret-telegram-calls.sh` как обязательный шаг.
+2. **`README.md`** — только краткое описание, bootstrap one-liner и ссылка на GUIDE. Без дублирования архитектуры, env-таблиц и списка фич.
+3. **AI_CONTEXT.md** — локальный deployment context; при изменении структуры обновить `.cursor/AI_CONTEXT.example.md`.
+4. **Перед деплоем** — проверить, что все новые `WRTG_*` / `FRONT_IP` env vars задокументированы в `openwrt/config.default` и `docs/GUIDE.md`.
+5. Не создавать ROADMAP.md без явного запроса.
+6. Версию bump'ить только при значимых изменениях (новые модули, env vars, изменение bridge flow).
 7. Worker code хранить только в `openwrt/cf-worker.js`; в markdown не копировать.
 8. `install.sh` копирует на роутер только `docs/GUIDE.md`.
 
@@ -36,5 +35,4 @@ alwaysApply: true
 
 Добавили `WRTG_WS_FOO_SEC` в код → обновить:
 - `openwrt/config.default` (закомментированная строка + описание)
-- `README.md` (таблица настроек)
-- `docs/GUIDE.md` (таблица env)
+- `docs/GUIDE.md` (секция env)
