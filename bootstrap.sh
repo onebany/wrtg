@@ -68,7 +68,7 @@ resolve_latest_ver() {
 		_api="$(gitea_api_base)/releases/latest"
 	fi
 	fetch "$_api" "$TMP/latest.json" || err "cannot resolve latest release from $_api"
-	_tag="$(parse_tag_name "$TMP/latest.json")"
+	_tag="$(parse_tag_name "$TMP/latest.json" | tr -d '\r')"
 	[ -n "$_tag" ] || err "latest release tag not found in API response"
 	printf '%s' "$_tag"
 }
@@ -112,9 +112,11 @@ detect_arch() {
 	esac
 }
 
-verify_bundle_checksum() { # bundle_path
-	_sum_url="${1%/*}/SHA256SUMS"
-	_bundle="$(basename "$1")"
+verify_bundle_checksum() { # ver bundle_path
+	_ver="$1"
+	_bundle_path="$2"
+	_sum_url="$(bundle_url "$_ver" SHA256SUMS)"
+	_bundle="$(basename "$_bundle_path")"
 	command -v sha256sum >/dev/null 2>&1 || {
 		warn "sha256sum not found — skipping checksum verification"
 		return 0
@@ -125,7 +127,7 @@ verify_bundle_checksum() { # bundle_path
 	fi
 	_expected="$(awk -v f="$_bundle" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
 	[ -n "$_expected" ] || err "$_bundle missing from SHA256SUMS"
-	_actual="$(sha256sum "$1" | awk '{print $1}')"
+	_actual="$(sha256sum "$_bundle_path" | awk '{print $1}')"
 	[ "$_actual" = "$_expected" ] || err "bundle checksum mismatch"
 }
 
@@ -145,7 +147,7 @@ install_from_bundle() { # ver
 	_url="$(bundle_url "$_ver" "$BUNDLE")"
 	echo "wrtg: downloading bundle $_ver ..."
 	fetch "$_url" "$TMP/$BUNDLE" || return 1
-	verify_bundle_checksum "$TMP/$BUNDLE"
+	verify_bundle_checksum "$_ver" "$TMP/$BUNDLE"
 	tar -xzf "$TMP/$BUNDLE" -C "$TMP" || err "extract failed"
 	_dir="$(find_install_dir "$TMP")" || err "install.sh not found in bundle"
 	echo "wrtg: installing ..."
@@ -168,7 +170,8 @@ install_from_binary() { # ver
 	tar -xzf "$TMP/src.tar.gz" -C "$TMP/src" || err "source extract failed"
 	_dir="$(find_install_dir "$TMP/src")" || err "install.sh not found in source archive"
 	mkdir -p "$_dir/dist"
-	install -m 755 "$TMP/$_bin" "$_dir/dist/$_bin"
+	cp "$TMP/$_bin" "$_dir/dist/$_bin"
+	chmod 755 "$_dir/dist/$_bin"
 
 	echo "wrtg: installing ..."
 	SKIP_BUILD=1 sh "$_dir/install.sh"

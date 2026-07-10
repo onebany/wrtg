@@ -18,6 +18,14 @@
 
 set -e
 
+# Portable file install (OpenWrt busybox often lacks install(1)).
+install_file() {
+	_mode="$1"; _src="$2"; _dest="$3"
+	cp "$_src" "$_dest"
+	chmod "$_mode" "$_dest"
+}
+
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)"
 ROUTER="${ROUTER:-}"
@@ -152,13 +160,13 @@ install_luci_local() {
 	[ "$SKIP_LUCI" = "1" ] && return
 	step "Installing LuCI web app..."
 	mkdir -p "$LUCI_TMPL_DST" "$(dirname "$LUCI_MENU_DST")" "$(dirname "$LUCI_ACL_DST")" "$DOCS_DST"
-	install -m 644 "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/"*.ut "$LUCI_TMPL_DST/"
-	install -m 644 "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$LUCI_MENU_DST"
-	install -m 644 "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$LUCI_ACL_DST"
+	for f in $LUCI_FILES; do install_file 644 "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/$f" "$LUCI_TMPL_DST/$f"; done
+	install_file 644 "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$LUCI_MENU_DST"
+	install_file 644 "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$LUCI_ACL_DST"
 	for f in ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md GUIDE.md; do rm -f "$DOCS_DST/docs/$f"; done
 	rmdir "$DOCS_DST/docs" 2>/dev/null || true
-	for f in $DOC_FILES; do [ -f "$DOCS_SRC/$f" ] && install -m 644 "$DOCS_SRC/$f" "$DOCS_DST/$f"; done
-	install -m 644 "$ROOT/VERSION" "$ETC/version"
+	for f in $DOC_FILES; do [ -f "$DOCS_SRC/$f" ] && install_file 644 "$DOCS_SRC/$f" "$DOCS_DST/$f"; done
+	install_file 644 "$ROOT/VERSION" "$ETC/version"
 	rm -f /usr/lib/lua/luci/controller/wrtg.lua /usr/lib/lua/luci/model/cbi/wrtg.lua 2>/dev/null || true
 	rm -rf /usr/lib/lua/luci/view/wrtg /tmp/luci-* /tmp/luci-indexcache 2>/dev/null || true
 	/etc/init.d/rpcd restart 2>/dev/null || true
@@ -171,19 +179,19 @@ install_files() {
 	step "Installing daemon + service files..."
 	mkdir -p "$ETC" /usr/sbin /var/lib/wrtg
 	# mv-into-place: overwriting a running binary directly fails with ETXTBSY.
-	install -m 755 "$1" /usr/sbin/wrtg.new && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
+	install_file 755 "$1" /usr/sbin/wrtg.new && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
 	for f in lib.sh setup-nft.sh update-cidr.sh; do
-		install -m 755 "$PKG_DIR/$f" "$ETC/$f"
+		install_file 755 "$PKG_DIR/$f" "$ETC/$f"
 	done
-	install -m 644 "$PKG_DIR/cidr-extra.txt" "$ETC/cidr-extra.txt"
-	install -m 644 "$PKG_DIR/cf-worker.js" "$ETC/cf-worker.js"
-	install -m 755 "$PKG_DIR/wrtg.init" "$INITD"
-	install -m 644 "$ROOT/VERSION" "$ETC/version"
+	install_file 644 "$PKG_DIR/cidr-extra.txt" "$ETC/cidr-extra.txt"
+	install_file 644 "$PKG_DIR/cf-worker.js" "$ETC/cf-worker.js"
+	install_file 755 "$PKG_DIR/wrtg.init" "$INITD"
+	install_file 644 "$ROOT/VERSION" "$ETC/version"
 	rm -f "$ETC/zapret-telegram-calls.sh" "$ETC/calls-debug.sh" /etc/nftables.d/wrtg.nft
 
 	# IP→DC maps: ship template if missing; always ensure learned file exists.
 	if [ ! -f "$ETC/dc-ips.txt" ] && [ -f "$PKG_DIR/dc-ips.txt" ]; then
-		install -m 644 "$PKG_DIR/dc-ips.txt" "$ETC/dc-ips.txt"
+		install_file 644 "$PKG_DIR/dc-ips.txt" "$ETC/dc-ips.txt"
 		ok "Wrote $ETC/dc-ips.txt"
 	fi
 	[ -f "$ETC/dc-ips-learned.txt" ] || touch "$ETC/dc-ips-learned.txt"
@@ -336,3 +344,4 @@ if [ -n "$ROUTER" ]; then
 else
 	install_local
 fi
+
