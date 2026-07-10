@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.9 — 2026-07-10
+
+### Fixed
+- **`bootstrap.sh` SHA256SUMS URL** — checksum fetch used a local path (`/tmp/.../SHA256SUMS`), so `curl` failed with `(3) URL rejected`; now downloads from the release asset URL.
+- **OpenWrt install without `install(1)`** — `install.sh` and bootstrap fallback use `cp` + `chmod` via `install_file()` (busybox on many routers has no `install` applet).
+
 ## 0.5.8 — 2026-07-10
 
 ### Fixed
