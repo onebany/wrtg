@@ -8,7 +8,7 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 
 Полное руководство (архитектура, CF Worker/Proxy, конфигурация): [docs/GUIDE.md](docs/GUIDE.md).
 
-## Возможности (v0.5.3)
+## Возможности (v0.5.5)
 
 - **Прозрачный DNAT** — клиентам не нужен прокси; nftables перенаправляет TCP 80/443/5222 к демону
 - **Direct-bridge MTProto** — расшифровка obfuscated2, relay-init, AES-CTR в обе стороны
@@ -28,7 +28,7 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 - **TCP fallback** — `:443` на FRONT_IP или media CDN при неудаче WS
 - **Blind relay** — TLS/HTTP passthrough для web.telegram.org и нераспознанного трафика
 - **LuCI (ucode)** — status (вкл. dc_learn), config, logs, docs; unified `install.sh`
-- **CI/CD** — `cargo test` + статические musl-бинарники (amd64/arm64/arm) в GitHub Releases
+- **CI/CD** — `cargo test` + статические musl-бинарники (amd64/arm64/arm) в [Gitea Releases](https://github.com/onebany/wrtg/releases) и [GitHub Releases](https://github.com/onebany/wrtg/releases)
 
 ## Требования
 
@@ -39,7 +39,7 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 
 ## Скачать готовый бинарник
 
-Готовые статические бинарники публикуются в [GitHub Releases](https://github.com/onebany/wrtg/releases).
+Статические бинарники публикуются в [Gitea Releases](https://github.com/onebany/wrtg/releases) (основной) и [GitHub Releases](https://github.com/onebany/wrtg/releases).
 
 | Архитектура роутера | Файл |
 |---------------------|------|
@@ -49,72 +49,48 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 
 Узнать архитектуру на роутере: `uname -m` (`x86_64`, `aarch64`, `armv7l`).
 
-### Скачать на роутер
-
-Подставьте нужную версию и архитектуру:
-
 ```bash
-VER=v0.5.3
+VER=v0.5.5
 ARCH=arm64   # amd64 | arm64 | arm
+BASE=https://github.com/onebany/wrtg
 
-wget -O /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+wget -O /tmp/wrtg "${BASE}/releases/download/${VER}/wrtg-linux-${ARCH}"
 chmod +x /tmp/wrtg
 ```
 
-Через `curl`:
+## Установка
+
+### На роутере (рекомендуется) — bootstrap one-liner
+
+Скачивает релиз и запускает `install.sh` без git и Rust:
 
 ```bash
-curl -fsSL -o /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
-chmod +x /tmp/wrtg
+wget -qO- https://github.com/onebany/wrtg/raw/branch/main/bootstrap.sh | sh
 ```
 
-### Установка с готовым бинарником
-
-Бинарник — только демон. Скрипты init/nft/CIDR — в репозитории. Проще всего клонировать репо и вызвать `install.sh` с уже скачанным файлом:
+Конкретная версия или GitHub:
 
 ```bash
-cd /tmp
+VER=v0.5.5 wget -qO- https://github.com/onebany/wrtg/raw/branch/main/bootstrap.sh | sh
+WRTG_REPO=onebany/wrtg wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
+```
+
+Опции `install.sh` передаются через env: `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
+
+### С ПК (разработчик) — clone + SSH deploy
+
+```bash
 git clone https://github.com/onebany/wrtg.git
-cd wrtg
-mkdir -p dist
-wget -O "dist/wrtg-linux-${ARCH}" "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
-chmod +x "dist/wrtg-linux-${ARCH}"
-SKIP_BUILD=1 sh install.sh
-```
-
-Вручную (минимум):
-
-```bash
-install -m 755 /tmp/wrtg /usr/sbin/wrtg
-# затем скопируйте openwrt/* из репозитория и:
-/etc/init.d/wrtg enable
-/etc/init.d/wrtg start
-```
-
-С ПК (бинарник + конфиги по SSH):
-
-```bash
-scp dist/wrtg-linux-arm64 root@192.168.1.1:/usr/sbin/wrtg
-ssh root@192.168.1.1 'chmod +x /usr/sbin/wrtg && /etc/init.d/wrtg restart'
-```
-
-## Быстрая установка
-
-### С ПК (рекомендуется)
-
-```bash
 cd wrtg
 ROUTER=root@192.168.20.254 sh install.sh
 ```
 
-Скрипт соберёт бинарник под архитектуру роутера, загрузит файлы, установит LuCI (ucode), настроит nft, cron и запустит сервис.
+Собирает бинарник под архитектуру роутера, загружает файлы, LuCI, nft, cron и запускает сервис.
 
-Только LuCI (без пересборки демона):
+Только LuCI:
 
 ```bash
 ROUTER=root@192.168.20.254 sh install.sh --luci-only
-# или:
-ROUTER=root@192.168.20.254 sh openwrt/luci-app-wrtg/install-luci.sh
 ```
 
 Без LuCI:
@@ -123,7 +99,36 @@ ROUTER=root@192.168.20.254 sh openwrt/luci-app-wrtg/install-luci.sh
 SKIP_LUCI=1 ROUTER=root@192.168.20.254 sh install.sh
 ```
 
-### Прямо на роутере
+### Обновить только демон (уже установлен)
+
+```bash
+VER=v0.5.5 ARCH=arm64
+wget -O /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+install -m 755 /tmp/wrtg /usr/sbin/wrtg
+/etc/init.d/wrtg restart
+```
+
+С ПК:
+
+```bash
+scp dist/wrtg-linux-arm64 root@192.168.20.254:/usr/sbin/wrtg
+ssh root@192.168.20.254 '/etc/init.d/wrtg restart'
+```
+
+### С ПК без Rust — release binary + install.sh
+
+```bash
+VER=v0.5.5 ARCH=arm64
+BASE=https://github.com/onebany/wrtg
+git clone https://github.com/onebany/wrtg.git
+cd wrtg
+mkdir -p dist
+wget -O "dist/wrtg-linux-${ARCH}" "${BASE}/releases/download/${VER}/wrtg-linux-${ARCH}"
+chmod +x "dist/wrtg-linux-${ARCH}"
+SKIP_BUILD=1 ROUTER=root@192.168.20.254 sh install.sh
+```
+
+### Прямо на роутере (из клона)
 
 ```bash
 cd /tmp/wrtg
@@ -134,14 +139,9 @@ sh install.sh
 
 ```bash
 make build                  # dist/wrtg-linux-{amd64,arm64,arm}
+make install-amd64          # только amd64, локально
 ROUTER=root@192.168.1.1 make install
-```
-
-### Быстрый деплой (уже собранный бинарник)
-
-```bash
-sh build-rust.sh amd64
-SKIP_BUILD=1 ROUTER=root@192.168.20.254 sh install.sh
+make bundle                 # dist/wrtg-openwrt.tar.gz + SHA256SUMS для релиза
 ```
 
 ## Проверка
@@ -233,7 +233,8 @@ docker compose up -d
 ```
 Cargo.toml              # workspace
 crates/wrtg/            # Rust daemon
-install.sh              # установка демона + LuCI (ROUTER=..., SKIP_LUCI=1, --luci-only)
+install.sh              # установка демона + LuCI (bootstrap, ROUTER=..., SKIP_LUCI=1)
+bootstrap.sh            # one-liner: release bundle или binary+source → install.sh
 openwrt/luci-app-wrtg/  # LuCI ucode app (status, config, logs)
 docker/                 # Dockerfile + compose
 ```

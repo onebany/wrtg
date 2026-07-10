@@ -1,7 +1,7 @@
 # wrtg — AI Context template
 
 **Last updated:** 2026-07-10  
-**Current version:** 0.5.3
+**Current version:** 0.5.5
 
 Скопируйте этот файл в gitignored `.cursor/AI_CONTEXT.md` и добавляйте туда
 только локальное состояние deployment.
