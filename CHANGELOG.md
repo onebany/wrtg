@@ -6,6 +6,7 @@
 
 ### Fixed
 - **`bootstrap.sh` SHA256SUMS URL** — checksum fetch used a local path (`/tmp/.../SHA256SUMS`), so `curl` failed with `(3) URL rejected`; now downloads from the release asset URL.
+- **install.sh non-interactive exit** — interactive_config returned status 1 without a TTY under set -e, so bootstrap install aborted after the banner.
 - **OpenWrt install without `install(1)`** — `install.sh` and bootstrap fallback use `cp` + `chmod` via `install_file()` (busybox on many routers has no `install` applet).
 
 ## 0.5.8 — 2026-07-10
