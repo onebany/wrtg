@@ -105,7 +105,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		{% if (length(cur_worker)) { %}<span style="color:#2e7d32;font-size:13px">● настроен</span>
 		{% } else { %}<span style="color:#e08e0b;font-size:13px">● не задан</span>{% } %}
 	</h3>
-	<p style="margin:.2em 0 .8em">Бесплатный Cloudflare Worker включает <b>DC1/DC3/DC5, стикеры и анимированные emoji</b>. У каждого роутера — свой Worker; вставьте его адрес ниже.</p>
+	<p style="margin:.2em 0 .8em">Бесплатный Cloudflare Worker включает <b>DC1/DC3/DC5 и media passthrough</b>. У каждого роутера — свой Worker; вставьте его адрес ниже.</p>
 
 	<details style="margin-bottom:.8em">
 		<summary style="cursor:pointer;font-weight:600">Как создать свой Worker (5 минут)</summary>
