@@ -90,15 +90,15 @@ detect_arch() {
 # ── interactive config (only with a TTY, fresh install) ──────────────────────
 ask() { # prompt default -> echoes answer
 	_p="$1"; _d="$2"; _a=
-	if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then echo "$_d"; return; fi
+	if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then echo "$_d"; return 0; fi
 	printf '%s%s%s [%s]: ' "$C_B" "$_p" "$C_0" "${_d:-none}" >&2
 	read -r _a || _a=
 	[ -n "$_a" ] && echo "$_a" || echo "$_d"
 }
 
 interactive_config() {
-	[ "$ASSUME_YES" = "1" ] && return
-	[ -t 0 ] || return
+	[ "$ASSUME_YES" = "1" ] && return 0
+	[ -t 0 ] || return 0
 	# Only prompt on a fresh install (no existing /etc/wrtg/config)
 	if [ -n "$ROUTER" ]; then
 		ssh "$ROUTER" '[ -f /etc/wrtg/config ]' 2>/dev/null && return 0
