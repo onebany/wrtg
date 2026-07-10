@@ -6,13 +6,19 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::cf_balancer::{
-    cf_fallback_disabled, proxy_domains_for_dc, worker_domains, worker_domains_for_dc,
-    worker_passthrough_disabled,
+    cf_fallback_disabled, proxy_domains_for_dc, update_proxy_domain_for_dc, worker_domains,
+    worker_domains_for_dc, worker_passthrough_disabled,
 };
-use crate::cf_proxy::connect_cf_proxy_ws;
+use crate::cf_proxy::try_cf_proxy_domain;
 use crate::cf_worker_pool::{acquire as acquire_cf_worker, schedule_refill as schedule_cf_refill};
+use crate::fronting::{
+    clear_fronting_fail, mark_fronting_failed, should_skip_fronting, try_ws_fronting,
+};
 use crate::handshake::PrefixedStream;
-use crate::ip_fail::{clear_ip_fail, mark_ip_failed, should_skip_direct_ws};
+use crate::ip_fail::{
+    clear_dc_fail, clear_ip_fail, mark_dc_failed, mark_ip_failed, should_skip_direct_ws,
+    ws_connect_timeout,
+};
 use crate::media::{http_front_host, rewrite_http_front_host};
 use crate::mtproto::{
     dc_default_ip, tcp_fallback_targets, ws_domains, ws_target_ip, CryptoCtx, HandshakeInfo,
@@ -21,16 +27,28 @@ use crate::sockopt::{tune_tcp, RELAY_BUF_SIZE};
 use crate::splitter::MsgSplitter;
 use crate::tls_sni::{passthrough_host, passthrough_targets};
 use crate::ws::{
-    connect_cf_worker_tcp, connect_cf_worker_ws, connect_ws, is_ws_redirect, RawWebSocket,
+    connect_cf_worker_tcp, connect_cf_worker_ws, connect_ws, is_ws_redirect, ws_ping_frame,
+    RawWebSocket,
 };
 use crate::ws_blacklist::ws_blacklisted;
 use crate::ws_pool::{acquire, schedule_refill};
 
 const WS_CHANNEL_CAP: usize = 256;
 const WS_SEND_BATCH_MAX: usize = 32;
-const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CF_PROXY_ATTEMPTS: usize = 3;
+
+fn ws_ping_interval() -> Duration {
+    static D: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
+        std::env::var("WRTG_WS_PING_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&s| s > 0)
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(30))
+    });
+    *D
+}
 
 pub async fn bridge_ws(
     client: PrefixedStream,
@@ -51,6 +69,18 @@ pub async fn bridge_ws(
     let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(WS_CHANNEL_CAP);
     let (recv_tx, mut recv_rx) = mpsc::channel::<Vec<u8>>(WS_CHANNEL_CAP);
     let (pong_tx, mut pong_rx) = mpsc::channel::<Vec<u8>>(8);
+
+    let pong_tx_ping = pong_tx.clone();
+    let ping_driver = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(ws_ping_interval());
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if pong_tx_ping.send(ws_ping_frame()).await.is_err() {
+                break;
+            }
+        }
+    });
 
     let ws_send_driver = tokio::spawn(async move {
         loop {
@@ -153,6 +183,7 @@ pub async fn bridge_ws(
     };
     drop(send_tx);
     drop(pong_tx);
+    ping_driver.abort();
     ws_send_driver.abort();
     ws_recv_driver.abort();
     if up_finished {
@@ -162,6 +193,7 @@ pub async fn bridge_ws(
     }
     let _ = ws_send_driver.await;
     let _ = ws_recv_driver.await;
+    let _ = ping_driver.await;
     log::info!("[{label_down}] {dc_tag} WS session closed{media_tag}");
 }
 
@@ -239,15 +271,17 @@ async fn try_ws_with_domains(
     relay_init: &[u8],
     label: &str,
     dc: i32,
+    is_media: bool,
 ) -> Result<(RawWebSocket, String), (bool, bool)> {
     let mut all_blocked = true;
     let mut timed_out = false;
+    let connect_timeout = ws_connect_timeout(dc, is_media);
 
     for domain in domains {
         log::info!("[{label}] DC{dc} -> trying WSS {domain} via {target_ip}");
         match timeout(
-            WS_CONNECT_TIMEOUT,
-            connect_ws(target_ip, domain, "/apiws", WS_CONNECT_TIMEOUT),
+            connect_timeout,
+            connect_ws(target_ip, domain, "/apiws", connect_timeout),
         )
         .await
         {
@@ -306,6 +340,8 @@ pub async fn try_ws_bridge(
             match pooled.ws.send(relay_init).await {
                 Ok(()) => {
                     clear_ip_fail(&target_ip, hs.dc);
+                    clear_dc_fail(hs.dc, hs.is_media);
+                    clear_fronting_fail(&target_ip, hs.dc);
                     log::info!(
                         "[{label}] DC{} -> WS connected via pool ({})",
                         hs.dc,
@@ -324,12 +360,50 @@ pub async fn try_ws_bridge(
     }
 
     let domains = ws_domains(hs.dc, hs.is_media);
-    let (all_blocked, timed_out) =
-        match try_ws_with_domains(&target_ip, &domains, relay_init, label, hs.dc).await {
+    let connect_timeout = ws_connect_timeout(hs.dc, hs.is_media);
+    let (all_blocked, timed_out) = match try_ws_with_domains(
+        &target_ip,
+        &domains,
+        relay_init,
+        label,
+        hs.dc,
+        hs.is_media,
+    )
+    .await
+    {
+        Ok((ws, connected_domain)) => {
+            clear_ip_fail(&target_ip, hs.dc);
+            clear_dc_fail(hs.dc, hs.is_media);
+            clear_fronting_fail(&target_ip, hs.dc);
+            log::info!(
+                "[{label}] DC{} -> WS connected via {}",
+                hs.dc,
+                connected_domain
+            );
+            bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
+            schedule_refill(hs.dc, hs.is_media, target_ip);
+            return WsBridgeResult::Connected;
+        }
+        Err((blocked, to)) => (blocked, to),
+    };
+
+    if !should_skip_fronting(&target_ip, hs.dc) {
+        match try_ws_fronting(
+            &target_ip,
+            hs.dc,
+            hs.is_media,
+            relay_init,
+            label,
+            connect_timeout,
+        )
+        .await
+        {
             Ok((ws, connected_domain)) => {
                 clear_ip_fail(&target_ip, hs.dc);
+                clear_dc_fail(hs.dc, hs.is_media);
+                clear_fronting_fail(&target_ip, hs.dc);
                 log::info!(
-                    "[{label}] DC{} -> WS connected via {}",
+                    "[{label}] DC{} -> WS connected via fronting {}",
                     hs.dc,
                     connected_domain
                 );
@@ -337,12 +411,22 @@ pub async fn try_ws_bridge(
                 schedule_refill(hs.dc, hs.is_media, target_ip);
                 return WsBridgeResult::Connected;
             }
-            Err((blocked, to)) => (blocked, to),
-        };
+            Err((f_blocked, f_timed_out)) => {
+                mark_fronting_failed(&target_ip, hs.dc);
+                if !f_blocked {
+                    // all_blocked stays as from direct attempt
+                }
+                if f_timed_out {
+                    // timed_out may already be true from direct
+                }
+            }
+        }
+    }
 
     if timed_out {
         mark_ip_failed(&target_ip, hs.dc);
     }
+    mark_dc_failed(hs.dc, hs.is_media);
 
     WsBridgeResult::Failed {
         client,
@@ -438,41 +522,94 @@ pub async fn try_cf_fallback(
         }
     }
 
-    // CF Proxy balancer
-    for cf_domain in proxy_domains_for_dc(hs.dc)
+    // CF Proxy balancer: primary sequential, then parallel race
+    let cf_domains: Vec<_> = proxy_domains_for_dc(hs.dc)
         .into_iter()
         .take(MAX_CF_PROXY_ATTEMPTS)
-    {
-        log::info!("[{label}] DC{} -> trying CF proxy {cf_domain}", hs.dc);
-        match timeout(
-            CF_CONNECT_TIMEOUT,
-            connect_cf_proxy_ws(&cf_domain, hs.dc, hs.is_media, CF_CONNECT_TIMEOUT),
-        )
-        .await
+        .collect();
+
+    if let Some(primary) = cf_domains.first() {
+        log::info!("[{label}] DC{} -> trying CF proxy {primary}", hs.dc);
+        if let Some((ws, chosen)) =
+            finish_cf_proxy_connect(primary, hs.dc, hs.is_media, relay_init, label).await
         {
-            Ok(Ok(mut ws)) => {
-                if let Err(e) = ws.send(relay_init).await {
-                    ws.close().await;
-                    log::warn!("[{label}] DC{} CF proxy relay init failed: {e}", hs.dc);
-                    continue;
-                }
-                log::info!(
-                    "[{label}] DC{} -> WS connected via CF proxy {cf_domain}",
-                    hs.dc
-                );
+            update_proxy_domain_for_dc(hs.dc, &chosen);
+            bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
+            return CfBridgeResult::Connected;
+        }
+    }
+
+    if cf_domains.len() > 1 {
+        let dc = hs.dc;
+        let is_media = hs.is_media;
+        let label_owned = label.to_string();
+        let relay_init_owned = relay_init.to_vec();
+        let mut handles = Vec::new();
+        for cf_domain in cf_domains.into_iter().skip(1) {
+            let label_spawn = label_owned.clone();
+            let relay = relay_init_owned.clone();
+            handles.push(tokio::spawn(async move {
+                finish_cf_proxy_connect(&cf_domain, dc, is_media, &relay, &label_spawn).await
+            }));
+        }
+        for h in handles {
+            if let Ok(Some((ws, chosen))) = h.await {
+                update_proxy_domain_for_dc(hs.dc, &chosen);
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 return CfBridgeResult::Connected;
-            }
-            Ok(Err(e)) => {
-                log::warn!("[{label}] DC{} CF proxy {cf_domain} failed: {e}", hs.dc);
-            }
-            Err(_) => {
-                log::warn!("[{label}] DC{} CF proxy {cf_domain} timeout", hs.dc);
             }
         }
     }
 
     CfBridgeResult::Failed { client, ctx }
+}
+
+async fn finish_cf_proxy_connect(
+    cf_domain: &str,
+    dc: i32,
+    is_media: bool,
+    relay_init: &[u8],
+    label: &str,
+) -> Option<(RawWebSocket, String)> {
+    let cf_domain_owned = cf_domain.to_string();
+    match timeout(
+        CF_CONNECT_TIMEOUT,
+        try_cf_proxy_domain(cf_domain, dc, is_media, CF_CONNECT_TIMEOUT),
+    )
+    .await
+    {
+        Ok(Ok(mut ws)) => {
+            if let Err(e) = ws.send(relay_init).await {
+                ws.close().await;
+                log::warn!("[{label}] DC{dc} CF proxy relay init failed: {e}");
+                return None;
+            }
+            log::info!("[{label}] DC{dc} -> WS connected via CF proxy {cf_domain_owned}");
+            Some((ws, cf_domain_owned))
+        }
+        Ok(Err(e)) => {
+            if matches!(
+                e,
+                crate::ws::WsConnectError::Io(ref io)
+                    if io.kind() == std::io::ErrorKind::WouldBlock
+            ) {
+                log::debug!(
+                    "[{label}] DC{dc} CF proxy {cf_domain_owned} skipped: {}",
+                    e.into_io()
+                );
+            } else {
+                log::warn!(
+                    "[{label}] DC{dc} CF proxy {cf_domain_owned} failed: {}",
+                    e.into_io()
+                );
+            }
+            None
+        }
+        Err(_) => {
+            log::warn!("[{label}] DC{dc} CF proxy {cf_domain_owned} timeout");
+            None
+        }
+    }
 }
 
 pub enum TcpFallbackResult {

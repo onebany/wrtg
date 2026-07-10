@@ -12,6 +12,8 @@ static DC_WORKER_IDX: LazyLock<Mutex<HashMap<i32, usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static DC_PROXY_IDX: LazyLock<Mutex<HashMap<i32, usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static DC_PROXY_STICKY: LazyLock<Mutex<HashMap<i32, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn set_worker_domains(domains: Vec<String>) {
     *WORKER_DOMAINS.lock().unwrap() = domains;
@@ -23,6 +25,7 @@ pub fn set_proxy_domains(domains: Vec<String>) {
     *PROXY_DOMAINS.lock().unwrap() = domains;
     PROXY_RR.store(0, Ordering::Relaxed);
     DC_PROXY_IDX.lock().unwrap().clear();
+    DC_PROXY_STICKY.lock().unwrap().clear();
 }
 
 pub fn worker_domains() -> Vec<String> {
@@ -87,10 +90,36 @@ pub fn worker_domains_for_dc(dc: i32) -> Vec<String> {
     ordered_domains(&domains, dc, &DC_WORKER_IDX, &WORKER_RR)
 }
 
-/// Proxy domains for a DC in round-robin order.
+/// Proxy domains for a DC in round-robin order, sticky successful domain first.
 pub fn proxy_domains_for_dc(dc: i32) -> Vec<String> {
     let domains = proxy_domains();
-    ordered_domains(&domains, dc, &DC_PROXY_IDX, &PROXY_RR)
+    let sticky = DC_PROXY_STICKY.lock().unwrap().get(&dc).cloned();
+    let ordered = ordered_domains(&domains, dc, &DC_PROXY_IDX, &PROXY_RR);
+    if let Some(sticky_domain) = sticky {
+        if domains.iter().any(|d| d == &sticky_domain) {
+            let mut out = vec![sticky_domain];
+            for d in ordered {
+                if !out.iter().any(|x| x == &d) {
+                    out.push(d);
+                }
+            }
+            return out;
+        }
+    }
+    ordered
+}
+
+/// Remember which CF proxy base domain worked for a DC (sticky preference).
+pub fn update_proxy_domain_for_dc(dc: i32, domain: &str) {
+    let domain = domain.trim().to_ascii_lowercase();
+    if domain.is_empty() {
+        return;
+    }
+    let mut map = DC_PROXY_STICKY.lock().unwrap();
+    if map.get(&dc).map(String::as_str) == Some(domain.as_str()) {
+        return;
+    }
+    map.insert(dc, domain);
 }
 
 pub fn parse_domain_list(raw: &str) -> Vec<String> {
@@ -130,5 +159,14 @@ mod tests {
         // Different DC may start at different offset
         let c = worker_domains_for_dc(2);
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn sticky_proxy_domain_first() {
+        set_proxy_domains(vec!["a.co.uk".into(), "b.co.uk".into()]);
+        update_proxy_domain_for_dc(1, "b.co.uk");
+        let domains = proxy_domains_for_dc(1);
+        assert_eq!(domains.first().map(String::as_str), Some("b.co.uk"));
+        assert_eq!(domains.len(), 2);
     }
 }

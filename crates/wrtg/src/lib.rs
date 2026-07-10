@@ -1,10 +1,14 @@
 pub mod bridge;
 pub mod cf_balancer;
 pub mod cf_proxy;
+pub mod cf_proxy_cooldown;
+pub mod cf_proxy_doh;
 pub mod cf_proxy_domains;
 pub mod cf_worker_pool;
+pub mod check;
 pub mod config;
 pub mod dc_learn;
+pub mod fronting;
 pub mod handshake;
 pub mod ip_fail;
 pub mod media;

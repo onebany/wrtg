@@ -5,10 +5,7 @@
 			"file": {
 				"/etc/wrtg/config": [ "read" ],
 				"/etc/wrtg/version": [ "read" ],
-				"/etc/wrtg/docs/ARCHITECTURE.md": [ "read" ],
-				"/etc/wrtg/docs/DEVELOPMENT.md": [ "read" ],
-				"/etc/wrtg/docs/CF_WORKER_SETUP.md": [ "read" ],
-				"/etc/wrtg/docs/CF_PROXY.md": [ "read" ]
+				"/etc/wrtg/docs/GUIDE.md": [ "read" ]
 			}
 		},
 		"write": {

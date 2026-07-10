@@ -6,21 +6,21 @@
 
 Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — используйте только **wrtg** (Rust). Старый монорепозиторий `tg_wrt` (`legacy/tproxy-go`) также устарел.
 
-Подробная архитектура и блок-схемы: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).  
-Дневник разработки и текущее состояние: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Полное руководство (архитектура, CF Worker/Proxy, конфигурация): [docs/GUIDE.md](docs/GUIDE.md).
 
-## Возможности (v0.5.0)
+## Возможности (v0.5.3)
 
 - **Прозрачный DNAT** — клиентам не нужен прокси; nftables перенаправляет TCP 80/443/5222 к демону
 - **Direct-bridge MTProto** — расшифровка obfuscated2, relay-init, AES-CTR в обе стороны
 - **WebSocket bridge** — WSS на `FRONT_IP` с Host `kws{N}.web.telegram.org` / `kws{N}-1` (media)
-- **Fallback chain** — direct WS pool → direct WS → CF Worker pool/direct → optional CF Proxy → TCP → blind relay
+- **Fallback chain** — direct WS pool → direct WS → TLS fronting (opt-in) → CF Worker pool/direct → optional CF Proxy → TCP → blind relay
 - **Worker passthrough** — TLS / MTProto-over-HTTP media (emoji/стикеры) через CF Worker к real DC:port
 - **Self-learning IP→DC (`dc_learn`)** — запоминает `orig_ip → DC` из handshake; `/etc/wrtg/dc-ips.txt` + `dc-ips-learned.txt`
 - **WS connection pool** — non-media WSS для DC с настроенным front
 - **cf_worker_pool** — общий лимит WSS per (DC, media) через все Worker-домены
 - **TTL blacklist** — DC с HTTP 302 на все WS-домены пропускаются до истечения TTL
 - **ip_fail_until** — cooldown на FRONT_IP после таймаутов WS (пропуск direct WS)
+- **`wrtg --check`** — диагностика DNS / WSS / CF Worker / CF Proxy перед деплоем
 - **Адаптивный front scope** — `FRONT_IP` применяется только к нужным DC (`WRTG_FRONT_DCS`, по умолчанию `2,4`); остальные идут напрямую / через CF Worker с корректным `dst`
 - **Per-DC FRONT_IP** — `DC{N}_FRONT_IP` / `WRTG_DC_IPS`
 - **Предсказуемое применение config** — `/etc/init.d/wrtg restart`; `reload` является безопасным alias
@@ -54,7 +54,7 @@ Go-версия (`wrtgo`) снята с поддержки **2026-07-07** — и
 Подставьте нужную версию и архитектуру:
 
 ```bash
-VER=v0.5.0
+VER=v0.5.3
 ARCH=arm64   # amd64 | arm64 | arm
 
 wget -O /tmp/wrtg "https://github.com/onebany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
@@ -172,15 +172,26 @@ nft list table inet tg_tproxy
 | `WRTG_NO_WORKER_PASSTHROUGH` | Не туннелировать media passthrough через Worker (`1`) | выкл |
 | `WRTG_DC_LEARN_FILE` | Файл learned IP→DC (append-only) | `/etc/wrtg/dc-ips-learned.txt` |
 | `WRTG_DC_IPS_FILE` | Админский IP→DC файл | `/etc/wrtg/dc-ips.txt` |
-| `CF_PROXY_DOMAIN` | Cloudflare-proxied домен — WS fallback (через запятую) | пусто → [автопул](docs/CF_PROXY.md) |
+| `CF_PROXY_DOMAIN` | Cloudflare-proxied домен — WS fallback (через запятую) | пусто → [автопул](docs/GUIDE.md#cf-proxy-fallback) |
 | `WRTG_CFPROXY_AUTO` | Автозагрузка публичного CF Proxy pool (`1` — вкл) | `0` |
 | `WRTG_NO_CFPROXY` | Отключить CF Worker/Proxy fallback (`1`) | выкл |
 | `WRTG_IP_FAIL_COOLDOWN_SEC` | Cooldown FRONT_IP после WS timeout (сек) | `3600` |
+| `WRTG_FRONTING_SNI` | Opt-in TLS fronting SNI (пусто = выкл) | пусто |
+| `WRTG_FRONTING_COOLDOWN_SEC` | Cooldown после неудачи fronting (сек) | `1800` |
+| `WRTG_DC_FAIL_COOLDOWN_SEC` | Cooldown адаптивного WS timeout per DC (сек) | `60` |
+| `WRTG_WS_FAIL_TIMEOUT_SEC` | Обычный WS connect timeout (сек) | `5` |
+| `WRTG_WS_FAIL_TIMEOUT_FAST_SEC` | Быстрый WS timeout после fail DC (сек) | `2` |
 | `WRTG_WS_POOL_SIZE` | Non-media direct WS pool per fronted DC, макс. 8 | `2` |
 | `WRTG_WS_POOL_TTL_SEC` | TTL соединений в пуле (сек) | `120` |
 | `WRTG_CF_WORKER_POOL_SIZE` | Общий Worker pool per (DC, media), макс. 4 | `2` |
 | `WRTG_CF_WORKER_POOL_TTL_SEC` | TTL соединений CF Worker pool (сек) | `120` |
 | `WRTG_WS_BLACKLIST_TTL_SEC` | TTL blacklist DC после HTTP 302 (сек) | `2700` (45 мин) |
+| `WRTG_CFPROXY_429_COOLDOWN_SEC` | Начальный cooldown CF proxy после HTTP 429 (сек) | `45` |
+| `WRTG_CFPROXY_429_MAX_COOLDOWN_SEC` | Макс. cooldown CF proxy после 429 (сек) | `300` |
+| `WRTG_CFPROXY_PARALLEL` | Параллельные попытки CF proxy fallback | `2` |
+| `WRTG_DOH_CACHE_SEC` | TTL кеша DoH-резолва для CF proxy (сек) | `300` |
+| `WRTG_WS_PING_SEC` | Интервал idle WebSocket ping в bridge (сек) | `30` |
+| `WRTG_TCP_KEEPALIVE_SEC` | TCP keepalive на relay-сокетах (сек) | `30` |
 | `CIDR_UPDATE_HOUR` | Час обновления CIDR | `4` |
 
 Дополнительные подсети: `/etc/wrtg/cidr-extra.txt`.
@@ -195,7 +206,7 @@ nft list table inet tg_tproxy
 
 > Размеры/TTL пулов, cooldown и blacklist TTL кешируются при старте — меняются только через `restart`, не `reload`.
 
-CF Worker: [пошаговая настройка](docs/CF_WORKER_SETUP.md), исходник [`openwrt/cf-worker.js`](openwrt/cf-worker.js). CF Proxy: [`docs/CF_PROXY.md`](docs/CF_PROXY.md).
+CF Worker / CF Proxy: [docs/GUIDE.md](docs/GUIDE.md), исходник Worker — [`openwrt/cf-worker.js`](openwrt/cf-worker.js).
 
 ## Удаление
 
@@ -231,4 +242,4 @@ docker/                 # Dockerfile + compose
 
 - **Голосовые/видеозвонки** — wrtg перехватывает только **TCP** (сигналинг). Медиа идёт по **UDP/WebRTC** и **не проксируется**; это вне scope wrtg (интеграция с zapret не планируется).
 - **DC1/DC3/DC5** — при HTTP 302 на direct WS используйте **CF Worker** (`CF_WORKER_DOMAIN`) — нативный fallback wrtg, без zapret.
-- CF Worker / CF Proxy fallback: [CF_WORKER_SETUP.md](docs/CF_WORKER_SETUP.md), [CF_PROXY.md](docs/CF_PROXY.md).
+- CF Worker / CF Proxy fallback: [docs/GUIDE.md](docs/GUIDE.md).

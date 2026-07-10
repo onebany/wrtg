@@ -1,7 +1,7 @@
 # wrtg — AI Context template
 
-**Last updated:** 2026-07-09  
-**Current version:** 0.5.0
+**Last updated:** 2026-07-10  
+**Current version:** 0.5.3
 
 Скопируйте этот файл в gitignored `.cursor/AI_CONTEXT.md` и добавляйте туда
 только локальное состояние deployment.
@@ -22,22 +22,10 @@ LAN → nftables DNAT TCP 80/443/5222 → wrtg :8443
 - UDP/WebRTC вне scope.
 - wrtg не зависит от zapret.
 
-## 0.5.0
-
-- verified TLS и строгий WebSocket handshake/framing;
-- Worker Telegram CIDR/port allowlist + optional secret;
-- relay teardown при закрытии любой стороны;
-- bounded direct/Worker pools;
-- public CF Proxy pool opt-in;
-- atomic CIDR/nft update;
-- config применяется restart (`reload` = restart);
-- LuCI POST/CSRF и полный uninstall.
-
 ## Источники истины
 
 - `README.md` — установка и пользовательская конфигурация;
-- `docs/ARCHITECTURE.md` — поток и модули;
-- `docs/DEVELOPMENT.md` — текущее состояние и release checks;
+- `docs/GUIDE.md` — архитектура, CF Worker/Proxy, env vars, release checks;
 - `CHANGELOG.md` — история;
 - `openwrt/config.default` — OpenWrt config;
 - `openwrt/cf-worker.js` — единственный исходник Worker.

@@ -49,7 +49,7 @@ FRONT_IP="149.154.167.220"
 
 # Cloudflare Worker domain(s) for WS fallback (comma-separated).
 # Native wrtg solution — no zapret required. Restart to apply.
-# Setup guide: docs/CF_WORKER_SETUP.md  |  source: openwrt/cf-worker.js
+# Setup guide: docs/GUIDE.md  |  source: openwrt/cf-worker.js
 # CF_WORKER_DOMAIN="your-worker.username.workers.dev"
 
 # Optional Worker secret. Configure the same value as the Cloudflare Worker
@@ -88,6 +88,26 @@ FRONT_IP="149.154.167.220"
 
 # Cooldown after WS connect timeout to FRONT_IP (skip direct WS, seconds).
 # WRTG_IP_FAIL_COOLDOWN_SEC="3600"   # default 3600 (1 hour)
+
+# Opt-in TLS fronting fallback when direct WS fails (empty = disabled).
+# Connect to target IP with Host kws{N}.web.telegram.org, SNI from WRTG_FRONTING_SNI.
+# WRTG_FRONTING_SNI=""
+# WRTG_FRONTING_COOLDOWN_SEC="1800"  # default 1800 (30 min)
+
+# Adaptive WS connect timeout after DC WS failure (seconds).
+# WRTG_DC_FAIL_COOLDOWN_SEC="60"           # default 60
+# WRTG_WS_FAIL_TIMEOUT_SEC="5"             # normal timeout (default 5)
+# WRTG_WS_FAIL_TIMEOUT_FAST_SEC="2"        # fast timeout after DC fail (default 2)
+
+# CF proxy HTTP 429 cooldown (exponential backoff per domain)
+# WRTG_CFPROXY_429_COOLDOWN_SEC="45"       # initial cooldown (seconds)
+# WRTG_CFPROXY_429_MAX_COOLDOWN_SEC="300"  # max cooldown (seconds)
+# WRTG_CFPROXY_PARALLEL="2"                # parallel CF proxy fallback attempts
+# WRTG_DOH_CACHE_SEC="300"                 # DoH resolve cache TTL (seconds)
+
+# WebSocket / TCP keepalive for bridge relay sockets
+# WRTG_WS_PING_SEC="30"          # idle WS ping interval (seconds)
+# WRTG_TCP_KEEPALIVE_SEC="30"    # TCP keepalive period (seconds)
 
 # Alternative front IP env names (CLI --front-ip takes precedence over all):
 # WRTG_FRONT_IP="149.154.167.220"

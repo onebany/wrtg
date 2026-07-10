@@ -6,51 +6,17 @@
 import { readfile } from 'fs';
 
 const DOCS_DIR = '/etc/wrtg/docs';
-let doc = http.formvalue('doc') ?? 'ARCHITECTURE';
-
-let filename = 'ARCHITECTURE.md';
-let doctitle = _('Architecture');
-
-if (doc == 'DEVELOPMENT') {
-	filename = 'DEVELOPMENT.md';
-	doctitle = _('Development');
-} else if (doc == 'CF_WORKER_SETUP') {
-	filename = 'CF_WORKER_SETUP.md';
-	doctitle = _('CF Worker Setup');
-} else if (doc == 'CF_PROXY') {
-	filename = 'CF_PROXY.md';
-	doctitle = _('CF Proxy');
-} else {
-	doc = 'ARCHITECTURE';
-}
+const filename = 'GUIDE.md';
+const doctitle = _('Guide');
 
 let content = readfile(DOCS_DIR + '/' + filename);
 if (!content)
 	content = _('Document not found. Re-run install.sh to deploy documentation.');
-
-let base = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 %}
 
 {% include('header') %}
 
 <h2>{{ _('wrtg Documentation') }}</h2>
-
-<div class="cbi-section">
-	<ul class="cbi-tabmenu">
-		<li class="{{ doc == 'ARCHITECTURE' ? 'cbi-tab' : 'cbi-tab-disabled' }}">
-			<a href="{{ base }}?doc=ARCHITECTURE">{{ _('Architecture') }}</a>
-		</li>
-		<li class="{{ doc == 'DEVELOPMENT' ? 'cbi-tab' : 'cbi-tab-disabled' }}">
-			<a href="{{ base }}?doc=DEVELOPMENT">{{ _('Development') }}</a>
-		</li>
-		<li class="{{ doc == 'CF_WORKER_SETUP' ? 'cbi-tab' : 'cbi-tab-disabled' }}">
-			<a href="{{ base }}?doc=CF_WORKER_SETUP">{{ _('CF Worker Setup') }}</a>
-		</li>
-		<li class="{{ doc == 'CF_PROXY' ? 'cbi-tab' : 'cbi-tab-disabled' }}">
-			<a href="{{ base }}?doc=CF_PROXY">{{ _('CF Proxy') }}</a>
-		</li>
-	</ul>
-</div>
 
 <div class="cbi-section">
 	<h3>{{ doctitle }}</h3>

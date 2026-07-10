@@ -29,6 +29,13 @@
 - **MTProxy secret mode**: not supported (direct obfuscated2 only, same as Go).
 - **Runtime `front-ip`**: `--front-ip`, `WRTG_FRONT_IP`, `FRONT_IP`, or `/etc/wrtg/config` on OpenWrt.
 
+## 0.5.2 behavior changes
+
+- **`wrtg --check`** — standalone connectivity probe; does not start the daemon.
+- **TLS fronting** — set `WRTG_FRONTING_SNI` to enable fallback between direct WS and CF.
+- **Adaptive WS timeout** — after DC WS failure, connect timeout drops to
+  `WRTG_WS_FAIL_TIMEOUT_FAST_SEC` for `WRTG_DC_FAIL_COOLDOWN_SEC`.
+
 ## 0.5.0 behavior changes
 
 - WSS/HTTPS now requires a valid public TLS certificate.
