@@ -99,7 +99,7 @@ interactive_config() {
 	fi
 	say ""
 	say "${C_B}Setup${C_0} ${C_D}(press Enter to accept defaults)${C_0}"
-	[ -z "$CFG_LAN_IF" ] && CFG_LAN_IF="$(ask 'LAN interface (clients side)' 'eth0')"
+	[ -z "$CFG_LAN_IF" ] && CFG_LAN_IF="$(ask 'LAN interface (clients side, empty=auto)' '')"
 	[ -z "$CFG_FRONT_IP" ] && CFG_FRONT_IP="$(ask 'Front IP (Telegram entry)' '149.154.167.220')"
 	if [ -z "$CFG_CF_WORKER" ]; then
 		say "${C_D}Cloudflare Worker — fixes DC1/3/5, stickers & animated emoji.${C_0}"
