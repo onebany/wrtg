@@ -5,7 +5,7 @@
 			"file": {
 				"/etc/wrtg/config": [ "read" ],
 				"/etc/wrtg/version": [ "read" ],
-				"/etc/wrtg/docs/GUIDE.md": [ "read" ]
+				"/etc/wrtg/README.md": [ "read" ]
 			}
 		},
 		"write": {

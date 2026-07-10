@@ -1,7 +1,7 @@
 # wrtg — AI Context template
 
 **Last updated:** 2026-07-10  
-**Current version:** 0.5.6
+**Current version:** 0.5.7
 
 Скопируйте в gitignored `.cursor/AI_CONTEXT.md` и добавляйте только локальное состояние deployment.
 
@@ -18,8 +18,7 @@ LAN → nftables DNAT TCP 80/443/5222 → wrtg :8443
 
 | Файл | Содержание |
 |------|------------|
-| `README.md` | Краткий landing + bootstrap one-liner |
-| `docs/GUIDE.md` | Архитектура, настройка, CF Worker/Proxy, диагностика |
+| `README.md` | Единый документ: landing, архитектура, настройка, CF Worker/Proxy, диагностика |
 | `CHANGELOG.md` | История релизов |
 | `openwrt/config.default` | Шаблон `/etc/wrtg/config` |
 | `openwrt/cf-worker.js` | Исходник CF Worker |
