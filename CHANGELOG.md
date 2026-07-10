@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.5.8 — 2026-07-10
+
+### Fixed
+- **README accuracy** — fallback chain order (`ws_blacklist`/`ip_fail` before direct WS,
+  CF Worker sequential not parallel, CF Proxy parallel race), `wrtg --check` scope,
+  `WRTG_NO_CFPROXY` also disables worker passthrough, `LISTEN` vs `WRTG_LISTEN`, CIDR/cidr-extra
+  merge path, LuCI section, blind-relay classification.
+
+### Changed
+- **Docs wording** — neutral media/CDN/passthrough terms in README, LuCI, and config.default (no emoji/sticker mentions).
+
 ## 0.5.7 — 2026-07-10
 
 ### Changed
@@ -145,7 +156,7 @@
 ## 0.4.3 — 2026-07-08
 
 ### Added
-- **Worker passthrough for media/emoji** — TLS / MTProto-over-HTTP media traffic that can't be MTProto-bridged (so it would `blind_relay` to the front, which returns HTTP 302) now tunnels through the CF Worker to the **real DC IP:port**. Fixes emoji/stickers on transparent-mode networks where only the front is reachable. Requires the Worker to honour the `port` query param (see below); falls back to front passthrough if the Worker is unreachable. Disable with `WRTG_NO_WORKER_PASSTHROUGH=1`.
+- **Worker passthrough for media** — TLS / MTProto-over-HTTP media traffic that can't be MTProto-bridged (so it would `blind_relay` to the front, which returns HTTP 302) now tunnels through the CF Worker to the **real DC IP:port**. Fixes media/CDN loading on transparent-mode networks where only the front is reachable. Requires the Worker to honour the `port` query param (see below); falls back to front passthrough if the Worker is unreachable. Disable with `WRTG_NO_WORKER_PASSTHROUGH=1`.
 - **CF Worker `port` param** — `wss://<worker>/apiws?dst=IP&dc=N&port=P` (default 443). Worker source is now maintained in `openwrt/cf-worker.js`; backward-compatible (existing MTProto path unaffected).
 - **Richer LuCI dashboard** — Status page shows service/routing/CF-worker cards, per-DC last outcome, activity counts and auto-refresh; Logs get filter, colour highlighting and auto-refresh.
 - **Guided CF Worker section in LuCI Settings** — a dedicated per-router panel with a configured/not-set badge, a collapsible 5-step "create your Worker" how-to (links to Documentation → CF Worker Setup for the code), the `CF_WORKER_DOMAIN` field and Save & Restart. Plus a quick-set form (FRONT_IP / WRTG_FRONT_DCS / CF_PROXY_DOMAIN) and raw editor.
@@ -161,7 +172,7 @@
 ### Release prep
 - **Friendly `install.sh`** — coloured progress, dependency check, TTY-gated setup prompts (LAN_IF / FRONT_IP / CF_WORKER_DOMAIN with defaults), `mv`-into-place binary swap (no ETXTBSY), post-install verification and a clear summary with next steps.
 - **One-line router install** — `bootstrap.sh` downloads a release bundle and runs `install.sh` (no git/Rust). Release workflow now publishes `wrtg-openwrt.tar.gz` (binaries + service files + LuCI + docs) alongside the per-arch binaries.
-- **Docs** — README rewritten (quickstart-first, current); CF_WORKER_SETUP covers media/emoji passthrough; ARCHITECTURE shows the worker-passthrough branch.
+- **Docs** — README rewritten (quickstart-first, current); CF_WORKER_SETUP covers media passthrough; ARCHITECTURE shows the worker-passthrough branch.
 
 ## 0.4.2 — 2026-07-07
 
