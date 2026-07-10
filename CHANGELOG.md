@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.5.10 — 2026-07-10
+
+### Fixed
+- **Worker HTTP passthrough target** — `worker_passthrough_dst` no longer rewrites
+  MTProto-over-HTTP tunnels to `FRONT_IP:80`. The front answers `kws{N}` Host
+  headers with HTTP 302, which breaks emoji/sticker API calls; the CF Worker now
+  connects to the real DC IP (with Host rewrite applied in `blind_relay`).
+
 ## 0.5.9 — 2026-07-10
 
 ### Fixed
