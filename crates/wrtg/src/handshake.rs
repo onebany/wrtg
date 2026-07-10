@@ -109,7 +109,7 @@ async fn read_init_buffer(
         if n > 0 {
             let slice = &buf[..n];
             if is_http_transport(slice) && has_complete_http_headers(slice) {
-                return Err((stream, slice.to_vec(), "http passthrough".into()));
+                return Err(read_full_http_request(stream, slice.to_vec()).await);
             }
             if looks_like_tls_stream(slice) {
                 return Err((stream, slice.to_vec(), "tls passthrough".into()));
@@ -136,6 +136,65 @@ async fn read_init_buffer(
         return Err((stream, buf[..n].to_vec(), format!("short read {n}")));
     }
     Err((stream, buf[..n].to_vec(), "unrecognized handshake".into()))
+}
+
+/// MTProto-over-HTTP POST /api sends headers then a body. We must not hand
+/// blind_relay a header-only buffer or the upstream waits for Content-Length
+/// bytes and the client sees hung emoji/media API calls.
+async fn read_full_http_request(
+    mut stream: TcpStream,
+    mut buf: Vec<u8>,
+) -> (TcpStream, Vec<u8>, String) {
+    let header_end = match buf.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(i) => i + 4,
+        None => {
+            return (stream, buf, "http passthrough".into());
+        }
+    };
+    if let Some(content_len) = parse_http_content_length(&buf[..header_end]) {
+        let total = header_end.saturating_add(content_len);
+        while buf.len() < total && buf.len() < INIT_READ_MAX {
+            let need = (total - buf.len()).min(INIT_READ_MAX - buf.len());
+            let mut tmp = vec![0u8; need];
+            let chunk = timeout(Duration::from_millis(750), stream.read(&mut tmp)).await;
+            match chunk {
+                Err(_) => break,
+                Ok(Ok(0)) => break,
+                Ok(Ok(k)) => buf.extend_from_slice(&tmp[..k]),
+                Ok(Err(e)) => return (stream, buf, e.to_string()),
+            }
+        }
+    }
+    (stream, buf, "http passthrough".into())
+}
+
+fn parse_http_content_length(headers: &[u8]) -> Option<usize> {
+    let lower: Vec<u8> = headers.iter().map(|b| b.to_ascii_lowercase()).collect();
+    for pat in [b"\r\ncontent-length:" as &[u8], b"\ncontent-length:"] {
+        let mut search = 0usize;
+        while search + pat.len() <= lower.len() {
+            let Some(rel) = lower[search..].windows(pat.len()).position(|w| w == pat) else {
+                break;
+            };
+            let start = search + rel + pat.len();
+            let mut i = start;
+            while i < lower.len() && (lower[i] == b' ' || lower[i] == b'\t') {
+                i += 1;
+            }
+            let val_start = i;
+            while i < lower.len() && lower[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > val_start {
+                return std::str::from_utf8(&headers[val_start..i])
+                    .ok()?
+                    .parse()
+                    .ok();
+            }
+            search = start;
+        }
+    }
+    None
 }
 
 fn find_handshake_offset(buf: &[u8]) -> Option<usize> {
@@ -181,5 +240,22 @@ mod tests {
 
         let tls = [0x16, 0x03, 0x01, 0x00, 0x05];
         assert!(looks_like_tls_stream(&tls));
+    }
+
+    #[test]
+    fn parse_http_content_length_value() {
+        let req = b"POST /api HTTP/1.1\r\nHost: 149.154.171.255:80\r\nContent-Length: 176\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n";
+        assert_eq!(parse_http_content_length(req), Some(176));
+    }
+
+    #[test]
+    fn read_full_http_request_needs_body() {
+        let headers = b"POST /api HTTP/1.1\r\nHost: 149.154.171.255:80\r\nContent-Length: 8\r\n\r\n";
+        let body = b"deadbeef";
+        assert_eq!(parse_http_content_length(headers), Some(8));
+        let mut full = headers.to_vec();
+        full.extend_from_slice(body);
+        let header_end = full.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(full.len(), header_end + body.len());
     }
 }
