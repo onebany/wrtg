@@ -1,6 +1,6 @@
 # wrtg — руководство
 
-**Version:** 0.5.3 · **Last updated:** 2026-07-10
+**Version:** 0.5.5 · **Last updated:** 2026-07-10
 
 Единый документ: архитектура, развёртывание, CF Worker/Proxy, конфигурация и проверки.
 История релизов — [`CHANGELOG.md`](../CHANGELOG.md). Исходник Worker — [`openwrt/cf-worker.js`](../openwrt/cf-worker.js).
@@ -86,6 +86,45 @@ flowchart TD
 | CIDR | `/var/lib/wrtg/cidrs.txt` |
 | Init | `/etc/init.d/wrtg` (procd, START=95) |
 | nft | table `inet tg_tproxy`, chain `prerouting` |
+
+#### Установка
+
+**На роутере (рекомендуется)** — bootstrap без git/Rust:
+
+```sh
+wget -qO- https://git.onebany.dedyn.io/bany/wrtg/raw/branch/main/bootstrap.sh | sh
+```
+
+`bootstrap.sh` скачивает `wrtg-openwrt.tar.gz` (если есть в релизе) или собирает установку из release-бинарника + source archive, затем запускает `install.sh` с `SKIP_BUILD=1`.
+
+Релизы: [Gitea](https://git.onebany.dedyn.io/bany/wrtg/releases) (основной), [GitHub](https://github.com/onebany/wrtg/releases). Переменные: `VER=v0.5.5`, `WRTG_BASE_URL`, `WRTG_REPO=onebany/wrtg` (GitHub mode).
+
+**С ПК (разработчик):**
+
+```sh
+ROUTER=root@192.168.20.254 sh install.sh
+```
+
+**Обновить только демон:**
+
+```sh
+VER=v0.5.5 ARCH=arm64
+wget -O /tmp/wrtg "https://git.onebany.dedyn.io/bany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+install -m 755 /tmp/wrtg /usr/sbin/wrtg && /etc/init.d/wrtg restart
+```
+
+**С ПК без Rust:**
+
+```sh
+VER=v0.5.5 ARCH=arm64
+git clone https://git.onebany.dedyn.io/bany/wrtg.git && cd wrtg
+mkdir -p dist
+wget -O dist/wrtg-linux-${ARCH} "https://git.onebany.dedyn.io/bany/wrtg/releases/download/${VER}/wrtg-linux-${ARCH}"
+chmod +x dist/wrtg-linux-${ARCH}
+SKIP_BUILD=1 ROUTER=root@192.168.20.254 sh install.sh
+```
+
+Для публикации полного bundle в Gitea: `make bundle` → загрузить `dist/wrtg-openwrt.tar.gz` и `dist/SHA256SUMS`.
 
 `install.sh` собирает/копирует бинарник, конфиг, nft, cron (`update-cidr.sh`), LuCI.
 

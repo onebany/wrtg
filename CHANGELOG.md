@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.5.5 — 2026-07-10
+
+### Changed
+- **`bootstrap.sh` Gitea-first** — default release host `git.onebany.dedyn.io/bany/wrtg`;
+  `WRTG_BASE_URL` / `WRTG_RELEASE_URL` override; `WRTG_REPO=o/r` keeps GitHub mode.
+  Falls back to release binary + source archive when `wrtg-openwrt.tar.gz` is missing.
+- **Install docs** — README and `docs/GUIDE.md` list canonical paths: bootstrap one-liner,
+  `ROUTER=… install.sh`, daemon-only update, `SKIP_BUILD=1` without Rust.
+- **`make bundle`** — local OpenWrt install bundle + SHA256SUMS (for Gitea/GitHub uploads).
+- **`make install-amd64`** — single-arch local install without building arm targets.
+- **`install.sh`** — LAN_IF prompt default is auto-detect (empty), not `eth0`.
+
 ## 0.5.4 — 2026-07-10
 
 ### Fixed
