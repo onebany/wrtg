@@ -122,7 +122,10 @@ async fn handle_conn(stream: TcpStream) {
         Ok(None) => {}
         Err((stream, raw, err)) => {
             let head = if raw.len() > 64 { &raw[..64] } else { &raw };
-            log::warn!("[{label}] init: {err} raw64={head:02x?} -> passthrough");
+            log::warn!(
+                "[{label}] init: {err} len={} raw64={head:02x?} -> passthrough",
+                raw.len()
+            );
             blind_relay(stream, &orig_ip, orig_port, &raw, &label).await;
         }
     }
