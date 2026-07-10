@@ -13,6 +13,66 @@ use tokio::time::timeout;
 
 type WsStream = tokio_rustls::client::TlsStream<TcpStream>;
 
+#[derive(Debug, Clone)]
+pub struct WsHandshakeError {
+    pub status_code: u16,
+    pub status_line: String,
+    pub headers: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum WsConnectError {
+    Io(std::io::Error),
+    Handshake(WsHandshakeError),
+    Timeout,
+}
+
+impl WsConnectError {
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Handshake(h) => Some(h.status_code),
+            _ => None,
+        }
+    }
+
+    pub fn into_io(self) -> std::io::Error {
+        match self {
+            Self::Io(e) => e,
+            Self::Timeout => std::io::Error::new(std::io::ErrorKind::TimedOut, "WebSocket timeout"),
+            Self::Handshake(h) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("WS handshake failed: {}", h.status_line.trim()),
+            ),
+        }
+    }
+}
+
+impl From<std::io::Error> for WsConnectError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+pub fn is_ws_http_status(err: &WsConnectError, code: u16) -> bool {
+    err.http_status() == Some(code)
+}
+
+pub fn retry_after_from_err(err: &WsConnectError) -> Duration {
+    let WsConnectError::Handshake(h) = err else {
+        return Duration::ZERO;
+    };
+    let retry_after = h.headers.get("retry-after").map(|s| s.trim()).unwrap_or("");
+    if retry_after.is_empty() {
+        return Duration::ZERO;
+    }
+    if let Ok(seconds) = retry_after.parse::<u64>() {
+        if seconds > 0 {
+            return Duration::from_secs(seconds);
+        }
+    }
+    Duration::ZERO
+}
+
 const MAX_HTTP_LINE: usize = 8 * 1024;
 const MAX_HTTP_HEADERS: usize = 32 * 1024;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -35,23 +95,65 @@ pub async fn connect_ws(
     path: &str,
     connect_timeout: Duration,
 ) -> std::io::Result<RawWebSocket> {
-    connect_ws_with_headers(target_ip, domain, path, connect_timeout, &[]).await
+    connect_ws_with_headers(target_ip, domain, path, connect_timeout, &[])
+        .await
+        .map_err(WsConnectError::into_io)
 }
 
-async fn connect_ws_with_headers(
+/// TLS fronting: TCP to `target_ip`, HTTP Host `host`, TLS SNI `sni`.
+pub async fn connect_ws_fronted(
+    target_ip: &str,
+    host: &str,
+    sni: &str,
+    path: &str,
+    connect_timeout: Duration,
+) -> Result<RawWebSocket, WsConnectError> {
+    connect_ws_inner(target_ip, host, Some(sni), path, connect_timeout, &[]).await
+}
+
+pub async fn connect_ws_with_headers(
     target_ip: &str,
     domain: &str,
     path: &str,
     connect_timeout: Duration,
     extra_headers: &[(&str, &str)],
-) -> std::io::Result<RawWebSocket> {
+) -> Result<RawWebSocket, WsConnectError> {
+    connect_ws_inner(
+        target_ip,
+        domain,
+        None,
+        path,
+        connect_timeout,
+        extra_headers,
+    )
+    .await
+}
+
+async fn connect_ws_inner(
+    target_ip: &str,
+    host: &str,
+    sni: Option<&str>,
+    path: &str,
+    connect_timeout: Duration,
+    extra_headers: &[(&str, &str)],
+) -> Result<RawWebSocket, WsConnectError> {
     let addr = format!("{target_ip}:443");
-    let tcp = timeout(connect_timeout, TcpStream::connect(&addr)).await??;
+    let tcp = match timeout(connect_timeout, TcpStream::connect(&addr)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(WsConnectError::Io(e)),
+        Err(_) => return Err(WsConnectError::Timeout),
+    };
     tune_tcp(&tcp);
 
     let connector = crate::tls::connector();
-    let server_name = ServerName::try_from(domain.to_string()).map_err(std::io::Error::other)?;
-    let mut stream = timeout(connect_timeout, connector.connect(server_name, tcp)).await??;
+    let tls_name = sni.unwrap_or(host);
+    let server_name = ServerName::try_from(tls_name.to_string())
+        .map_err(|e| WsConnectError::Io(std::io::Error::other(e)))?;
+    let mut stream = match timeout(connect_timeout, connector.connect(server_name, tcp)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(WsConnectError::Io(e)),
+        Err(_) => return Err(WsConnectError::Timeout),
+    };
 
     let ws_key = {
         let mut key = [0u8; 16];
@@ -61,7 +163,7 @@ async fn connect_ws_with_headers(
 
     let mut req = format!(
         "GET {path} HTTP/1.1\r\n\
-         Host: {domain}\r\n\
+         Host: {host}\r\n\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: {ws_key}\r\n\
@@ -70,10 +172,10 @@ async fn connect_ws_with_headers(
     );
     for (name, value) in extra_headers {
         if name.contains(['\r', '\n', ':']) || value.contains(['\r', '\n']) {
-            return Err(std::io::Error::new(
+            return Err(WsConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "invalid WebSocket header",
-            ));
+            )));
         }
         req.push_str(name);
         req.push_str(": ");
@@ -82,37 +184,46 @@ async fn connect_ws_with_headers(
     }
     req.push_str("\r\n");
 
-    timeout(connect_timeout, stream.write_all(req.as_bytes())).await??;
+    match timeout(connect_timeout, stream.write_all(req.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(WsConnectError::Io(e)),
+        Err(_) => return Err(WsConnectError::Timeout),
+    }
 
     let mut status_line = Vec::new();
-    read_line(
+    if let Err(e) = read_line(
         &mut stream,
         &mut status_line,
         connect_timeout,
         MAX_HTTP_LINE,
     )
-    .await?;
+    .await
+    {
+        return Err(map_read_err(e));
+    }
     let mut headers = HashMap::<String, String>::new();
     let mut headers_len = status_line.len();
     loop {
         let mut line = Vec::new();
-        read_line(&mut stream, &mut line, connect_timeout, MAX_HTTP_LINE).await?;
+        if let Err(e) = read_line(&mut stream, &mut line, connect_timeout, MAX_HTTP_LINE).await {
+            return Err(map_read_err(e));
+        }
         headers_len += line.len();
         if headers_len > MAX_HTTP_HEADERS {
-            return Err(std::io::Error::new(
+            return Err(WsConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "WebSocket response headers too large",
-            ));
+            )));
         }
         if line == b"\r\n" || line == b"\n" {
             break;
         }
         let line = String::from_utf8_lossy(&line);
         let Some((name, value)) = line.trim_end().split_once(':') else {
-            return Err(std::io::Error::new(
+            return Err(WsConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "malformed WebSocket response header",
-            ));
+            )));
         };
         headers
             .entry(name.trim().to_ascii_lowercase())
@@ -124,11 +235,17 @@ async fn connect_ws_with_headers(
     }
 
     let status = String::from_utf8_lossy(&status_line);
-    if status.split_whitespace().nth(1) != Some("101") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("WS handshake failed: {}", status.trim()),
-        ));
+    let status_code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    if status_code != 101 {
+        return Err(WsConnectError::Handshake(WsHandshakeError {
+            status_code,
+            status_line: status.trim().to_string(),
+            headers,
+        }));
     }
     let upgrade_ok = headers
         .get("upgrade")
@@ -142,10 +259,10 @@ async fn connect_ws_with_headers(
         .get("sec-websocket-accept")
         .is_some_and(|v| v == &expected_accept);
     if !upgrade_ok || !connection_ok || !accept_ok {
-        return Err(std::io::Error::new(
+        return Err(WsConnectError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invalid WebSocket upgrade response",
-        ));
+        )));
     }
 
     if let Err(e) = stream.get_ref().0.set_nodelay(true) {
@@ -163,7 +280,16 @@ async fn read_line(
 ) -> std::io::Result<()> {
     let mut byte = [0u8; 1];
     loop {
-        timeout(t, stream.read_exact(&mut byte)).await??;
+        match timeout(t, stream.read_exact(&mut byte)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "WebSocket read timeout",
+                ))
+            }
+        }
         buf.push(byte[0]);
         if buf.len() > max_len {
             return Err(std::io::Error::new(
@@ -175,6 +301,18 @@ async fn read_line(
             return Ok(());
         }
     }
+}
+
+fn map_read_err(e: std::io::Error) -> WsConnectError {
+    if e.kind() == std::io::ErrorKind::TimedOut {
+        WsConnectError::Timeout
+    } else {
+        WsConnectError::Io(e)
+    }
+}
+
+pub fn ws_ping_frame() -> Vec<u8> {
+    build_ws_frame(0x9, &[], true)
 }
 
 fn websocket_accept(key: &str) -> String {
@@ -228,6 +366,7 @@ async fn connect_cf_worker(
         &headers,
     )
     .await
+    .map_err(WsConnectError::into_io)
 }
 
 pub fn is_ws_redirect(err: &std::io::Error) -> bool {
@@ -235,6 +374,14 @@ pub fn is_ws_redirect(err: &std::io::Error) -> bool {
     [" 302 ", " 301 ", " 303 ", " 307 ", " 308 "]
         .iter()
         .any(|code| msg.contains(code))
+}
+
+pub fn is_ws_redirect_err(err: &WsConnectError) -> bool {
+    match err {
+        WsConnectError::Handshake(h) => matches!(h.status_code, 301 | 302 | 303 | 307 | 308),
+        WsConnectError::Io(e) => is_ws_redirect(e),
+        _ => false,
+    }
 }
 
 impl RawWebSocket {

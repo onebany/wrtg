@@ -27,11 +27,15 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let mut cfg = load_from_env();
+    let mut check_mode = false;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         let key = arg.trim_start_matches('-').trim_end_matches('\r');
         match key {
+            "check" => {
+                check_mode = true;
+            }
             "listen" => {
                 if let Some(v) = args.next() {
                     cfg.listen_addr = v.trim_end_matches('\r').to_string();
@@ -43,7 +47,7 @@ async fn main() {
                 }
             }
             "help" | "h" => {
-                eprintln!("usage: wrtg [--listen ADDR] [--front-ip IP]");
+                eprintln!("usage: wrtg [--listen ADDR] [--front-ip IP] [--check]");
                 return;
             }
             other => {
@@ -54,6 +58,10 @@ async fn main() {
     }
 
     apply_config(&cfg);
+
+    if check_mode {
+        std::process::exit(wrtg::check::run_check(&cfg).await);
+    }
     wrtg::dc_learn::load();
 
     if cfproxy_auto_enabled() {

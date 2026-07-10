@@ -3,11 +3,16 @@
 -#}
 
 {%
-import { readfile, writefile } from 'fs';
+import { readfile, writefile, popen } from 'fs';
 
 let cfg_path = '/etc/wrtg/config';
 let msg = '';
 let msg_ok = true;
+let check_out = '';
+
+function run_check_cmd() {
+	return trim(popen('/bin/sh -c \'. /etc/wrtg/lib.sh && set -a && load_config && /usr/sbin/wrtg --check 2>&1\'', 'r')?.read('all') ?? '');
+}
 
 function cfg_escape(val) {
 	val = replace(val, /[\r\n]/g, '');
@@ -52,6 +57,10 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 		system('chmod 600 /etc/wrtg/config');
 		msg = _('Saved. Restart wrtg to apply pools/scope changes.');
 		saved = true;
+	} else if (form == 'check') {
+		check_out = run_check_cmd();
+		msg = _('Connectivity check finished.');
+		saved = false;
 	} else if (form == 'raw') {
 		let data = http.formvalue('_cfg');
 		if (data != null) {
@@ -82,7 +91,7 @@ let cfg = readfile(cfg_path) ?? '';
 let cur_worker = cfg_val(cfg, 'CF_WORKER_DOMAIN');
 let cur_token = cfg_val(cfg, 'WRTG_CF_WORKER_TOKEN');
 let url = dispatcher.build_url('admin', 'services', 'wrtg', 'config');
-let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc=CF_WORKER_SETUP';
+let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 %}
 
 {% include('header') %}
@@ -104,7 +113,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc
 			<li>Зарегистрируйтесь (бесплатно) на <code>dash.cloudflare.com</code>.</li>
 			<li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Hello World</b> → <b>Deploy</b>.</li>
 			<li>Откройте <b>Edit code</b>, замените весь шаблон на код Worker для wrtg и нажмите <b>Deploy</b>.
-				Код и полная инструкция: <a href="{{ docs_url }}">Documentation → CF Worker Setup</a>.</li>
+				Код и полная инструкция: <a href="{{ docs_url }}">Documentation → Guide</a>.</li>
 			<li>Скопируйте адрес вида <code>name.username.workers.dev</code> и вставьте в поле ниже.</li>
 			<li>Нажмите <b>Save &amp; Restart</b>. В логах появится <code>WS connected via CF worker</code>.</li>
 		</ol>
@@ -131,7 +140,21 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs') + '?doc
 </div>
 
 <div class="cbi-section">
-	<h3>{{ _('Quick settings') }}</h3>
+	<h3>{{ _('Connectivity check') }}</h3>
+	<p style="font-size:13px;opacity:.85">{{ _('Probe DNS and WSS for FRONT_IP, CF Worker, and CF Proxy (same as wrtg --check).') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="check" />
+		<div class="cbi-page-actions">
+			<button class="cbi-button cbi-button-apply" type="submit">{{ _('Run check') }}</button>
+		</div>
+	</form>
+	{% if (length(check_out)) { %}
+		<pre style="margin-top:10px;font-size:12px;max-height:20em;overflow:auto">{{ check_out }}</pre>
+	{% } %}
+</div>
+
+<div class="cbi-section">
 	<form method="post" action="{{ url }}">
 		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
 		<input type="hidden" name="_form" value="quick" />

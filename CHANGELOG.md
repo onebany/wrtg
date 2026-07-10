@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.5.4 — 2026-07-10
+
+### Fixed
+- **OpenWrt tuning env vars** — `WRTG_CFPROXY_*`, `WRTG_DOH_CACHE_SEC`, `WRTG_WS_PING_SEC`,
+  and `WRTG_TCP_KEEPALIVE_SEC` from `/etc/wrtg/config` are now loaded by `lib.sh`, passed to
+  procd in `wrtg.init`, and exported for LuCI `wrtg --check`.
+
+## 0.5.3 — 2026-07-10
+
+### Changed
+- **Documentation consolidated** into single `docs/GUIDE.md` (architecture, CF Worker/Proxy,
+  env vars, release checks). Old docs stubbed with redirects; LuCI docs viewer simplified.
+- **`install.sh` Windows deploy** — `SKIP_BUILD=1` accepts a non-executable `dist/` binary (NTFS/Git Bash).
+
+## 0.5.2 — 2026-07-10
+
+### Added
+- **TLS fronting fallback** — opt-in via `WRTG_FRONTING_SNI`: connect to target IP with
+  Host `kws{N}.web.telegram.org` but alternate TLS SNI; cooldown
+  `WRTG_FRONTING_COOLDOWN_SEC` (default 1800s) after failure. Runs after direct WS,
+  before CF fallback.
+- **`wrtg --check`** — connectivity diagnostics: DNS, direct WSS via FRONT_IP, CF Worker
+  and CF Proxy WSS probes; exit 0/1.
+- **`dc_fail_until` + adaptive WS timeout** — after WS failure on a DC, shorter connect
+  timeout (2s vs 5s) for 60s.
+
+### Env
+- `WRTG_FRONTING_SNI`, `WRTG_FRONTING_COOLDOWN_SEC`
+- `WRTG_DC_FAIL_COOLDOWN_SEC`, `WRTG_WS_FAIL_TIMEOUT_SEC`, `WRTG_WS_FAIL_TIMEOUT_FAST_SEC`
+
+## 0.5.1 — 2026-07-10
+
+### Added
+- **CF proxy DoH fallback** — when hostname dial fails, resolve the base domain via
+  DoH (Cloudflare / Google / Quad9 / AdGuard race + 5 min cache) and retry with
+  IP + SNI.
+- **HTTP 429 cooldown per CF proxy domain** — exponential backoff 45s→300s;
+  cooled-down domains are skipped in `try_cf_fallback`.
+- **Parallel CF proxy fallback** — primary domain sequential, remaining domains
+  raced in parallel (semaphore via `WRTG_CFPROXY_PARALLEL`, default 2).
+- **WS idle ping + TCP keepalive** — bridge sends WebSocket ping every 30s;
+  relay sockets get TCP keepalive (30s default).
+- **Sticky CF proxy domain per DC** — successful CF proxy connect updates the
+  balancer preference for that DC.
+
+### Env
+- `WRTG_CFPROXY_429_COOLDOWN_SEC`, `WRTG_CFPROXY_429_MAX_COOLDOWN_SEC`,
+  `WRTG_CFPROXY_PARALLEL`, `WRTG_DOH_CACHE_SEC`, `WRTG_WS_PING_SEC`,
+  `WRTG_TCP_KEEPALIVE_SEC`
+
 ## 0.5.0 — 2026-07-09
 
 ### Security

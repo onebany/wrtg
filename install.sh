@@ -103,7 +103,7 @@ interactive_config() {
 	[ -z "$CFG_FRONT_IP" ] && CFG_FRONT_IP="$(ask 'Front IP (Telegram entry)' '149.154.167.220')"
 	if [ -z "$CFG_CF_WORKER" ]; then
 		say "${C_D}Cloudflare Worker — fixes DC1/3/5, stickers & animated emoji.${C_0}"
-		say "${C_D}Leave empty to set later (LuCI -> Settings, or ${ETC}/config). Guide: docs/CF_WORKER_SETUP.md${C_0}"
+		say "${C_D}Leave empty to set later (LuCI -> Settings, or ${ETC}/config). Guide: docs/GUIDE.md${C_0}"
 		CFG_CF_WORKER="$(ask 'CF_WORKER_DOMAIN (optional)' '')"
 	fi
 	say ""
@@ -130,7 +130,10 @@ build_binary() {
 pick_binary() {
 	arch="$(detect_arch)" || die "Unsupported CPU: $(uname -m)"
 	bin="$DIST_DIR/wrtg-linux-$arch"
-	[ -x "$bin" ] && { echo "$bin"; return; }
+	if [ -x "$bin" ] || { [ "$SKIP_BUILD" = "1" ] && [ -f "$bin" ]; }; then
+		echo "$bin"
+		return
+	fi
 	[ "$SKIP_BUILD" = "1" ] && die "Binary not found: $bin (SKIP_BUILD=1)"
 	build_binary "$arch" >&2
 	echo "$bin"
@@ -143,7 +146,8 @@ check_deps() { # runs on the target (local install)
 
 # ── LuCI ─────────────────────────────────────────────────────────────────────
 LUCI_FILES="status.ut config.ut logs.ut action.ut docs.ut"
-DOC_FILES="ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md"
+DOC_FILES="GUIDE.md"
+LEGACY_DOC_FILES="ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md"
 
 install_luci_local() {
 	[ "$SKIP_LUCI" = "1" ] && return
@@ -152,6 +156,7 @@ install_luci_local() {
 	install -m 644 "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/"*.ut "$LUCI_TMPL_DST/"
 	install -m 644 "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$LUCI_MENU_DST"
 	install -m 644 "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$LUCI_ACL_DST"
+	for f in $LEGACY_DOC_FILES; do rm -f "$DOCS_DST/$f"; done
 	for f in $DOC_FILES; do [ -f "$DOCS_SRC/$f" ] && install -m 644 "$DOCS_SRC/$f" "$DOCS_DST/$f"; done
 	install -m 644 "$ROOT/VERSION" "$ETC/version"
 	rm -f /usr/lib/lua/luci/controller/wrtg.lua /usr/lib/lua/luci/model/cbi/wrtg.lua 2>/dev/null || true
@@ -225,7 +230,7 @@ summary() {
 	say "  Open Telegram on a LAN device - logs should show ${C_C}direct handshake OK${C_0} / ${C_C}WS connected${C_0}."
 	if [ -z "$CFW" ]; then
 		warn "No CF Worker set - DC1/3/5, stickers and animated emoji need one."
-		say "     ${C_D}5-min setup: docs/CF_WORKER_SETUP.md -> then set CF_WORKER_DOMAIN and restart.${C_0}"
+		say "     ${C_D}5-min setup: docs/GUIDE.md -> then set CF_WORKER_DOMAIN and restart.${C_0}"
 	fi
 	say ""
 }
@@ -254,7 +259,13 @@ install_remote() {
 
 	if [ "$LUCI_ONLY" != "1" ]; then
 		BIN="$DIST_DIR/wrtg-linux-$garch"
-		[ -x "$BIN" ] || { [ "$SKIP_BUILD" = "1" ] && die "Binary not found: $BIN"; build_binary "$garch"; }
+		if [ -x "$BIN" ] || { [ "$SKIP_BUILD" = "1" ] && [ -f "$BIN" ]; }; then
+			:
+		elif [ "$SKIP_BUILD" = "1" ]; then
+			die "Binary not found: $BIN"
+		else
+			build_binary "$garch"
+		fi
 		step "Uploading daemon to $ROUTER..."
 		ssh "$ROUTER" "mkdir -p $ETC /var/lib/wrtg"
 		scp -qO "$BIN" "$ROUTER:/usr/sbin/wrtg.new"
@@ -302,7 +313,7 @@ REMOTE
 
 	if [ "$SKIP_LUCI" != "1" ]; then
 		step "Uploading LuCI web app..."
-		ssh "$ROUTER" "mkdir -p $LUCI_TMPL_DST $(dirname "$LUCI_MENU_DST") $(dirname "$LUCI_ACL_DST") $DOCS_DST"
+		ssh "$ROUTER" "mkdir -p $LUCI_TMPL_DST $(dirname "$LUCI_MENU_DST") $(dirname "$LUCI_ACL_DST") $DOCS_DST; rm -f $DOCS_DST/ARCHITECTURE.md $DOCS_DST/DEVELOPMENT.md $DOCS_DST/CF_WORKER_SETUP.md $DOCS_DST/CF_PROXY.md"
 		for f in $LUCI_FILES; do scp -qO "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/$f" "$ROUTER:$LUCI_TMPL_DST/"; done
 		scp -qO "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$ROUTER:$LUCI_MENU_DST"
 		scp -qO "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$ROUTER:$LUCI_ACL_DST"
