@@ -45,7 +45,7 @@ FRONT_IP="149.154.167.220"
 #   149.154.167.35 2
 #   149.154.171.255 5 media
 
-# ── Cloudflare fallback (DC1/DC3/DC5 HTTP 302 + DC5 emoji CDN) ───────────────
+# ── Cloudflare fallback (DC1/DC3/DC5 HTTP 302 + DC5 media CDN) ───────────────
 
 # Cloudflare Worker domain(s) for WS fallback (comma-separated).
 # Setup guide: README.md  |  source: openwrt/cf-worker.js
@@ -68,7 +68,7 @@ FRONT_IP="149.154.167.220"
 # WRTG_NO_CFPROXY="1"
 
 # Disable tunneling passthrough (TLS / MTProto-over-HTTP media) through the CF Worker.
-# On by default when CF_WORKER_DOMAIN is set; needed for emoji/stickers on blocked
+# On by default when CF_WORKER_DOMAIN is set; needed for media passthrough on blocked
 # networks. Set to 1 to keep passthrough on the front IP instead.
 # WRTG_NO_WORKER_PASSTHROUGH="1"
 
