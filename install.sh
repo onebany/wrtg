@@ -62,8 +62,8 @@ INITD="/etc/init.d/wrtg"
 LUCI_TMPL_DST="/usr/share/ucode/luci/template/wrtg"
 LUCI_MENU_DST="/usr/share/luci/menu.d/luci-app-wrtg.json"
 LUCI_ACL_DST="/usr/share/rpcd/acl.d/luci-app-wrtg.json"
-DOCS_SRC="$ROOT/docs"
-DOCS_DST="$ETC/docs"
+DOCS_SRC="$ROOT"
+DOCS_DST="$ETC"
 
 # Collected config (empty = keep config.default value)
 CFG_FRONT_IP="${FRONT_IP:-}"
@@ -103,7 +103,7 @@ interactive_config() {
 	[ -z "$CFG_FRONT_IP" ] && CFG_FRONT_IP="$(ask 'Front IP (Telegram entry)' '149.154.167.220')"
 	if [ -z "$CFG_CF_WORKER" ]; then
 		say "${C_D}Cloudflare Worker — fixes DC1/3/5, stickers & animated emoji.${C_0}"
-		say "${C_D}Leave empty to set later (LuCI -> Settings, or ${ETC}/config). Guide: docs/GUIDE.md${C_0}"
+		say "${C_D}Leave empty to set later (LuCI -> Settings, or ${ETC}/config). Guide: README.md${C_0}"
 		CFG_CF_WORKER="$(ask 'CF_WORKER_DOMAIN (optional)' '')"
 	fi
 	say ""
@@ -146,7 +146,7 @@ check_deps() { # runs on the target (local install)
 
 # ── LuCI ─────────────────────────────────────────────────────────────────────
 LUCI_FILES="status.ut config.ut logs.ut action.ut docs.ut"
-DOC_FILES="GUIDE.md"
+DOC_FILES="README.md"
 
 install_luci_local() {
 	[ "$SKIP_LUCI" = "1" ] && return
@@ -155,7 +155,8 @@ install_luci_local() {
 	install -m 644 "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/"*.ut "$LUCI_TMPL_DST/"
 	install -m 644 "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$LUCI_MENU_DST"
 	install -m 644 "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$LUCI_ACL_DST"
-	for f in ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md; do rm -f "$DOCS_DST/$f"; done
+	for f in ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md GUIDE.md; do rm -f "$DOCS_DST/docs/$f"; done
+	rmdir "$DOCS_DST/docs" 2>/dev/null || true
 	for f in $DOC_FILES; do [ -f "$DOCS_SRC/$f" ] && install -m 644 "$DOCS_SRC/$f" "$DOCS_DST/$f"; done
 	install -m 644 "$ROOT/VERSION" "$ETC/version"
 	rm -f /usr/lib/lua/luci/controller/wrtg.lua /usr/lib/lua/luci/model/cbi/wrtg.lua 2>/dev/null || true
@@ -229,7 +230,7 @@ summary() {
 	say "  Open Telegram on a LAN device - logs should show ${C_C}direct handshake OK${C_0} / ${C_C}WS connected${C_0}."
 	if [ -z "$CFW" ]; then
 		warn "No CF Worker set - DC1/3/5, stickers and animated emoji need one."
-		say "     ${C_D}5-min setup: docs/GUIDE.md -> then set CF_WORKER_DOMAIN and restart.${C_0}"
+		say "     ${C_D}5-min setup: LuCI -> Documentation (or README.md) -> set CF_WORKER_DOMAIN and restart.${C_0}"
 	fi
 	say ""
 }
@@ -312,7 +313,7 @@ REMOTE
 
 	if [ "$SKIP_LUCI" != "1" ]; then
 		step "Uploading LuCI web app..."
-		ssh "$ROUTER" "mkdir -p $LUCI_TMPL_DST $(dirname "$LUCI_MENU_DST") $(dirname "$LUCI_ACL_DST") $DOCS_DST; rm -f $DOCS_DST/ARCHITECTURE.md $DOCS_DST/DEVELOPMENT.md $DOCS_DST/CF_WORKER_SETUP.md $DOCS_DST/CF_PROXY.md"
+		ssh "$ROUTER" "mkdir -p $LUCI_TMPL_DST $(dirname "$LUCI_MENU_DST") $(dirname "$LUCI_ACL_DST") $DOCS_DST; rm -f $DOCS_DST/docs/ARCHITECTURE.md $DOCS_DST/docs/DEVELOPMENT.md $DOCS_DST/docs/CF_WORKER_SETUP.md $DOCS_DST/docs/CF_PROXY.md $DOCS_DST/docs/GUIDE.md; rmdir $DOCS_DST/docs 2>/dev/null || true"
 		for f in $LUCI_FILES; do scp -qO "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/$f" "$ROUTER:$LUCI_TMPL_DST/"; done
 		scp -qO "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$ROUTER:$LUCI_MENU_DST"
 		scp -qO "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$ROUTER:$LUCI_ACL_DST"

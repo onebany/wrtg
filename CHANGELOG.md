@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.7 — 2026-07-10
+
+### Changed
+- **Single documentation file** — merged `docs/GUIDE.md` into `README.md` (glossary,
+  architecture, config, CF Worker/Proxy, troubleshooting). Removed `docs/` directory.
+  LuCI Documentation page reads `/etc/wrtg/README.md` deployed by `install.sh`.
+
 ## 0.5.6 — 2026-07-10
 
 ### Changed
