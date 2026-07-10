@@ -50,7 +50,7 @@ die()  { printf '%s✗ %s%s\n' "$C_R" "$*" "$C_0" >&2; exit 1; }
 banner() {
 	printf '%s\n' "${C_B}${C_C}"
 	printf '%s\n' "  wrtg — transparent Telegram proxy for OpenWrt"
-	printf '%s\n' "  v${VERSION}${C_0}${C_D}   (no zapret · no client config)${C_0}"
+	printf '%s\n' "  v${VERSION}${C_0}${C_D}   (transparent · no client config)${C_0}"
 	printf '\n'
 }
 
@@ -147,7 +147,6 @@ check_deps() { # runs on the target (local install)
 # ── LuCI ─────────────────────────────────────────────────────────────────────
 LUCI_FILES="status.ut config.ut logs.ut action.ut docs.ut"
 DOC_FILES="GUIDE.md"
-LEGACY_DOC_FILES="ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md"
 
 install_luci_local() {
 	[ "$SKIP_LUCI" = "1" ] && return
@@ -156,7 +155,7 @@ install_luci_local() {
 	install -m 644 "$LUCI_DIR/root/usr/share/ucode/luci/template/wrtg/"*.ut "$LUCI_TMPL_DST/"
 	install -m 644 "$LUCI_DIR/root/usr/share/luci/menu.d/luci-app-wrtg.json" "$LUCI_MENU_DST"
 	install -m 644 "$LUCI_DIR/root/usr/share/rpcd/acl.d/luci-app-wrtg.json" "$LUCI_ACL_DST"
-	for f in $LEGACY_DOC_FILES; do rm -f "$DOCS_DST/$f"; done
+	for f in ARCHITECTURE.md DEVELOPMENT.md CF_WORKER_SETUP.md CF_PROXY.md; do rm -f "$DOCS_DST/$f"; done
 	for f in $DOC_FILES; do [ -f "$DOCS_SRC/$f" ] && install -m 644 "$DOCS_SRC/$f" "$DOCS_DST/$f"; done
 	install -m 644 "$ROOT/VERSION" "$ETC/version"
 	rm -f /usr/lib/lua/luci/controller/wrtg.lua /usr/lib/lua/luci/model/cbi/wrtg.lua 2>/dev/null || true

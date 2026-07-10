@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.5.6 — 2026-07-10
+
+### Changed
+- **Documentation rewrite** — `docs/GUIDE.md` is the single canonical doc (glossary,
+  architecture, config, CF Worker/Proxy, troubleshooting). `README.md` is a minimal
+  landing page with bootstrap one-liner only. Removed stub docs (`ARCHITECTURE.md`,
+  `DEVELOPMENT.md`, `CF_PROXY.md`, `CF_WORKER_SETUP.md`). No Flowseal/Zapret/tg-ws-proxy
+  references in user-facing docs.
+
 ## 0.5.5 — 2026-07-10
 
 ### Changed
