@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Internal / refactor
+- **Deduplicated the code** with no behaviour change: a shared `recrypt()` for the
+  three MTProto cipher directions; a generic `ttl_map::TtlMap<K>` backing the
+  per-IP/DC/domain cooldown and blacklist maps; a generic `conn_pool::Pool` that
+  the direct-WS and CF-worker pools are now thin adapters over (also closing a
+  pool size-race leak); one `tls_sni::http_host_raw()` HTTP-Host scanner behind
+  the extractors; one `https::get_over()` TLS-GET helper shared by the DoH and
+  CF-proxy-list fetches; and a `send_relay_init()` helper for the repeated
+  connect→send→bridge steps. Public APIs unchanged.
+
 ### CI / Supply chain
 - **Fail-closed checksum verification** — `bootstrap.sh` now aborts if
   `sha256sum` is missing or `SHA256SUMS` can't be fetched, instead of silently
