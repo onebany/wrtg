@@ -267,6 +267,24 @@ pub enum WsBridgeResult {
     },
 }
 
+/// Send the relay-init frame on a freshly-acquired socket. On failure, close the
+/// socket and log; return the still-owned socket on success so the caller bridges
+/// it. Shared by the pooled-WS / CF-worker paths that all start the same way.
+async fn send_relay_init(
+    mut ws: RawWebSocket,
+    relay_init: &[u8],
+    label: &str,
+    dc: i32,
+    via: &str,
+) -> Option<RawWebSocket> {
+    if let Err(e) = ws.send(relay_init).await {
+        ws.close().await;
+        log::warn!("[{label}] DC{dc} {via} relay init failed: {e}");
+        return None;
+    }
+    Some(ws)
+}
+
 async fn try_ws_with_domains(
     target_ip: &str,
     domains: &[String],
@@ -342,25 +360,18 @@ pub async fn try_ws_bridge(
     let splitter = MsgSplitter::new(relay_init, hs.proto_int).ok();
 
     if !hs.is_media {
-        if let Some(mut pooled) = acquire(hs.dc, hs.is_media).await {
-            match pooled.ws.send(relay_init).await {
-                Ok(()) => {
-                    clear_ip_fail(&target_ip, hs.dc);
-                    clear_dc_fail(hs.dc, hs.is_media);
-                    clear_fronting_fail(&target_ip, hs.dc);
-                    log::info!(
-                        "[{label}] DC{} -> WS connected via pool ({})",
-                        hs.dc,
-                        pooled.domain
-                    );
-                    bridge_ws(client, pooled.ws, ctx, splitter, label, hs.dc, hs.is_media).await;
-                    schedule_refill(hs.dc, hs.is_media, target_ip.clone());
-                    return WsBridgeResult::Connected;
-                }
-                Err(e) => {
-                    pooled.ws.close().await;
-                    log::warn!("[{label}] DC{} pooled WS relay init failed: {e}", hs.dc);
-                }
+        if let Some(pooled) = acquire(hs.dc, hs.is_media).await {
+            let domain = pooled.domain;
+            if let Some(ws) =
+                send_relay_init(pooled.ws, relay_init, label, hs.dc, "pooled WS").await
+            {
+                clear_ip_fail(&target_ip, hs.dc);
+                clear_dc_fail(hs.dc, hs.is_media);
+                clear_fronting_fail(&target_ip, hs.dc);
+                log::info!("[{label}] DC{} -> WS connected via pool ({domain})", hs.dc);
+                bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
+                schedule_refill(hs.dc, hs.is_media, target_ip.clone());
+                return WsBridgeResult::Connected;
             }
         }
     }
@@ -475,25 +486,15 @@ pub async fn try_cf_fallback(
     };
 
     // CF Worker pool
-    if let Some(mut pooled) = acquire_cf_worker(hs.dc, hs.is_media, orig_ip).await {
-        match pooled.ws.send(relay_init).await {
-            Ok(()) => {
-                log::info!(
-                    "[{label}] DC{} -> WS connected via CF worker pool ({})",
-                    hs.dc,
-                    pooled.worker
-                );
-                bridge_ws(client, pooled.ws, ctx, splitter, label, hs.dc, hs.is_media).await;
-                schedule_cf_refill(hs.dc, hs.is_media, orig_ip.to_string());
-                return CfBridgeResult::Connected;
-            }
-            Err(e) => {
-                pooled.ws.close().await;
-                log::warn!(
-                    "[{label}] DC{} CF worker pool relay init failed: {e}",
-                    hs.dc
-                );
-            }
+    if let Some(pooled) = acquire_cf_worker(hs.dc, hs.is_media, orig_ip).await {
+        let worker = pooled.worker;
+        if let Some(ws) =
+            send_relay_init(pooled.ws, relay_init, label, hs.dc, "CF worker pool").await
+        {
+            log::info!("[{label}] DC{} -> WS connected via CF worker pool ({worker})", hs.dc);
+            bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
+            schedule_cf_refill(hs.dc, hs.is_media, orig_ip.to_string());
+            return CfBridgeResult::Connected;
         }
     }
 
@@ -506,12 +507,12 @@ pub async fn try_cf_fallback(
         )
         .await
         {
-            Ok(Ok(mut ws)) => {
-                if let Err(e) = ws.send(relay_init).await {
-                    ws.close().await;
-                    log::warn!("[{label}] DC{} CF worker relay init failed: {e}", hs.dc);
+            Ok(Ok(ws)) => {
+                let Some(ws) =
+                    send_relay_init(ws, relay_init, label, hs.dc, "CF worker").await
+                else {
                     continue;
-                }
+                };
                 log::info!(
                     "[{label}] DC{} -> WS connected via CF worker {worker}",
                     hs.dc
