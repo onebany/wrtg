@@ -26,16 +26,28 @@ async fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // A hand-run `--check` lacks the procd environment the daemon is started
+    // with, so it would report the config file's worker/proxy as "not set".
+    // Seed env from the config file first (real env still wins) so diagnostics
+    // reflect the running setup.
+    let check_mode = env::args()
+        .skip(1)
+        .any(|a| a.trim_start_matches('-').trim_end_matches('\r') == "check");
+    if check_mode {
+        for (k, v) in wrtg::config::import_config_file(&wrtg::config::config_file_path()) {
+            if env::var_os(&k).is_none() {
+                env::set_var(&k, v);
+            }
+        }
+    }
+
     let mut cfg = load_from_env();
-    let mut check_mode = false;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         let key = arg.trim_start_matches('-').trim_end_matches('\r');
         match key {
-            "check" => {
-                check_mode = true;
-            }
+            "check" => {}
             "listen" => {
                 if let Some(v) = args.next() {
                     cfg.listen_addr = v.trim_end_matches('\r').to_string();

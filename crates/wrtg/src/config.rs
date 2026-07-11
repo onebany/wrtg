@@ -279,7 +279,10 @@ mod tests {
         let cfg = load_from_map(&map);
         assert_eq!(cfg.front_ip, "10.0.0.1");
         assert_eq!(cfg.front_dcs, vec![1, 3]);
-        assert_eq!(cfg.dc_front_ips.get(&2).map(String::as_str), Some("5.5.5.5"));
+        assert_eq!(
+            cfg.dc_front_ips.get(&2).map(String::as_str),
+            Some("5.5.5.5")
+        );
         // Absent listen key falls back to the built-in default.
         assert_eq!(cfg.listen_addr, "0.0.0.0:8443");
     }
