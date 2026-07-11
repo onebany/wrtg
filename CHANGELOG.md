@@ -2,6 +2,94 @@
 
 ## Unreleased
 
+## 0.5.16 — 2026-07-10
+
+### Added
+- **Live config reload (SIGHUP)** — `/etc/init.d/wrtg reload` now sends SIGHUP
+  instead of a full restart. The daemon re-reads `/etc/wrtg/config` and re-applies
+  FRONT_IP / front-DCs / Worker+Proxy domains and the DC-learn map **without
+  dropping live sessions**. LISTEN / nftables changes still need `restart`.
+  LuCI gains a **Save & Reload** button.
+- **`wrtg --check` probes every DC** — each of DC1–DC5 is tested over the path it
+  actually uses (front for DC2/4, the first CF Worker/Proxy to the real DC IP for
+  DC1/3/5), instead of only DC2. Worker/Proxy domains are resolved once up front.
+- **DC-learn management in LuCI** — Settings page can add a manual `IP → DC [media]`
+  override and clear the learned map; both apply via live reload.
+
+### Fixed
+- **CF domain paste** — `CF_WORKER_DOMAIN` / `CF_PROXY_DOMAIN` now accept a full
+  URL pasted from the Cloudflare dashboard: `parse_domain_list` strips the
+  scheme, path, and trailing slash (`https://w.workers.dev/apiws` → `w.workers.dev`).
+  Previously such a value failed TLS SNI ("Name does not resolve") or was silently
+  dropped by domain validation, disabling the Worker fallback.
+- **Test** — corrected `http_front_passthrough_keeps_dc_host_for_regular_dc`,
+  which asserted `parse_http_host` returns a DC-IP host; that helper
+  deliberately rejects DC-IP hosts, so the suite failed to build.
+- **Empty `WRTG_FRONT_DCS`** now means the default `2,4` (as when unset), not
+  "none". The shell config seeds it empty and procd drops empty env vars, so the
+  daemon ran on `2,4` — but `wrtg --check` via `set -a && load_config` exported
+  the empty string and mis-reported DC2/DC4 as Worker-routed. Use `none` to
+  disable fronting.
+- **LuCI** — removed the redundant Settings/Logs/Documentation quick-nav row on
+  the Status page; it duplicated LuCI's own submenu tabs.
+
+### Changed
+- Removed the dead `worker_passthrough_dst` identity helper and the unused
+  `orig_ip` argument of `should_try_worker_passthrough` (leftovers from the
+  0.5.11–0.5.15 emoji-picker routing changes). No behaviour change.
+
+## 0.5.15 — 2026-07-10
+
+### Fixed
+- **Media CDN HTTP emoji** — skip CF Worker passthrough for *all* MTProto-over-HTTP
+  (`:80`), including media CDN IPs (`149.154.175.211`, `91.108.56.155`, etc.).
+  Worker tunnels to the real DC :80 return HTTP 404; the session closed before
+  front fallback, so Android emoji picker API calls on DC1 media :80 failed while
+  regular DC2 :80 via `FRONT_IP` worked. Media CDN :80 now uses local front
+  passthrough with `kws{N}-1` Host rewrite (same path that already works for TLS).
+- **Passthrough logging** — log the actual wire `Host` header (e.g.
+  `149.154.167.41:80`) instead of the routing hint `kws{N}.web.telegram.org`.
+
+## 0.5.14 — 2026-07-10
+
+### Fixed
+- **Emoji picker HTTP routing** — skip CF Worker passthrough for regular DC
+  MTProto-over-HTTP (`Host: <dc-ip>:80`). Worker tunnels to the real DC :80 and
+  get HTTP 404; the session closed immediately so front passthrough never ran.
+  Regular DC :80 now goes straight to `FRONT_IP` with the original Host header.
+  Worker passthrough remains for media CDN / media-alt IPs with `kws{N}-1` Host
+  rewrite applied before the tunnel.
+
+## 0.5.13 — 2026-07-10
+
+### Fixed
+- **Emoji picker HTTP passthrough** — local `FRONT_IP:80` passthrough no longer
+  rewrites `Host` to `kws{N}.web.telegram.org` for regular DC MTProto-over-HTTP.
+  The front routes on `Host: <dc-ip>:80`; the `kws{N}` rewrite made it answer
+  HTTP 302 (`Location: https://core.telegram.org`) and the standard emoji grid
+  stayed empty. Media CDN IPs (`91.108.*`, curated media alt IPs) still get
+  `kws{N}-1` rewrite. Worker passthrough tunnels to the real DC IP again (not
+  `FRONT_IP:80`, which returns HTTP 400 from the CF edge). Response status
+  logged at INFO on passthrough for diagnosis.
+
+## 0.5.12 — 2026-07-10
+
+### Fixed
+- **Worker HTTP passthrough to FRONT** — skip tunneling MTProto-over-HTTP :80 to
+  `FRONT_IP` via the CF Worker. The front returns HTTP 400 to requests from the
+  CF edge (any Host); local front passthrough with `kws{N}` rewrite works from
+  the router. Fixes empty emoji picker when worker passthrough "succeeded" but
+  relayed 400 responses to clients.
+
+## 0.5.11 — 2026-07-10
+
+### Fixed
+- **Worker HTTP passthrough** — tunnel MTProto-over-HTTP to `FRONT_IP:80` (from
+  the CF edge) while keeping the client's original `Host: <dc-ip>:80`. Real DC
+  :80 returns HTTP 404; rewriting Host to `kws{N}` breaks routing on both
+  front and DC. `kws{N}` rewrite remains only for local front passthrough
+  fallback.
+
 ## 0.5.10 — 2026-07-10
 
 ### Fixed

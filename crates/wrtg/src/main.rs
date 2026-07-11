@@ -83,6 +83,8 @@ async fn main() {
         proxy_domains().len()
     );
 
+    spawn_reload_handler();
+
     let listener = match bind_transparent(&cfg.listen_addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -92,6 +94,26 @@ async fn main() {
     };
 
     serve(listener, cfg.listen_addr.clone(), handle_conn).await;
+}
+
+/// Reload front/domains + DC-learn from the config file on SIGHUP, so config
+/// edits apply without dropping live sessions. LISTEN / nftables changes still
+/// need a restart (the listener is already bound).
+fn spawn_reload_handler() {
+    tokio::spawn(async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut hup = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("SIGHUP handler unavailable: {e}");
+                return;
+            }
+        };
+        while hup.recv().await.is_some() {
+            log::info!("SIGHUP received — reloading config");
+            wrtg::config::reload_from_file();
+        }
+    });
 }
 
 async fn handle_conn(stream: TcpStream) {

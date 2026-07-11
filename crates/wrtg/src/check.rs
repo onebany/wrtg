@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use crate::cf_balancer::{proxy_domains, worker_domains};
 use crate::cf_proxy::cf_proxy_ws_domain;
 use crate::config::WrtgConfig;
-use crate::mtproto::{dc_default_ip, ws_domains};
+use crate::mtproto::{dc_default_ip, dc_front_ip, front_applies_to_dc, ws_domains};
 use crate::ws::{connect_cf_worker_ws, connect_ws, connect_ws_with_headers, WsConnectError};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -73,8 +73,8 @@ async fn probe_direct_wss(target_ip: &str, domain: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-async fn probe_cf_worker(worker: &str, dst_ip: &str) -> Result<(), String> {
-    connect_cf_worker_ws(worker, dst_ip, 2, PROBE_TIMEOUT)
+async fn probe_cf_worker(worker: &str, dst_ip: &str, dc: i32) -> Result<(), String> {
+    connect_cf_worker_ws(worker, dst_ip, dc, PROBE_TIMEOUT)
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -100,46 +100,52 @@ fn print_probe(p: &Probe) {
 
 pub async fn run_check(cfg: &WrtgConfig) -> i32 {
     let mut probes: Vec<Probe> = Vec::new();
-    let front = cfg.front_ip.clone();
-    let dst_dc2 = dc_default_ip(2).unwrap_or("149.154.167.51").to_string();
 
     eprintln!("============================================================");
     eprintln!("  wrtg connectivity check");
     eprintln!("============================================================");
 
-    eprintln!("\nDirect WSS (DC2 via FRONT_IP):");
-    for domain in ws_domains(2, false) {
-        let label = format!("{domain} @ {front}");
-        probes.push(probe_wss(&label, probe_direct_wss(&front, &domain)).await);
-    }
-
     let workers = worker_domains();
-    if !workers.is_empty() {
-        eprintln!("\nCloudflare Worker (DC2 WSS probe):");
-        for worker in &workers {
-            let label = format!("{worker}/apiws?dst={dst_dc2}");
-            probes.push(probe_wss(&label, probe_cf_worker(worker, &dst_dc2)).await);
-            probes.push(probe_dns(worker).await);
-        }
-    } else {
-        eprintln!("\nCloudflare Worker: not configured (skip)");
-    }
-
     let proxies = if cfg.cf_proxy_domains.is_empty() {
         proxy_domains()
     } else {
         cfg.cf_proxy_domains.clone()
     };
-    if !proxies.is_empty() {
-        eprintln!("\nCloudflare Proxy (DC2 WSS probe):");
-        for cf_domain in &proxies {
-            let ws_host = cf_proxy_ws_domain(cf_domain, 2, false);
-            let label = ws_host.clone();
-            probes.push(probe_wss(&label, probe_cf_proxy(cf_domain, &ws_host)).await);
-            probes.push(probe_dns(cf_domain).await);
+
+    // Resolve each configured Worker / Proxy domain once.
+    if !workers.is_empty() || !proxies.is_empty() {
+        eprintln!("\nDNS resolution (Worker / Proxy domains):");
+        for d in workers.iter().chain(proxies.iter()) {
+            probes.push(probe_dns(d).await);
         }
     } else {
-        eprintln!("\nCloudflare Proxy: not configured (skip)");
+        eprintln!("\nCloudflare Worker / Proxy: none configured");
+    }
+
+    // Probe every DC over the path it actually uses: fronted DCs (default 2/4)
+    // go direct WSS via the front IP; the rest tunnel through the first CF
+    // Worker (else the first CF Proxy) to the real DC IP.
+    eprintln!("\nPer-DC path probe:");
+    for dc in [1, 2, 3, 4, 5] {
+        let domain = ws_domains(dc, false)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| format!("dc{dc}"));
+        if front_applies_to_dc(dc) {
+            let ip = dc_front_ip(dc);
+            let label = format!("DC{dc} front {domain} @ {ip}");
+            probes.push(probe_wss(&label, probe_direct_wss(&ip, &domain)).await);
+        } else if let Some(worker) = workers.first() {
+            let dst = dc_default_ip(dc).unwrap_or("").to_string();
+            let label = format!("DC{dc} worker {worker} -> {dst}");
+            probes.push(probe_wss(&label, probe_cf_worker(worker, &dst, dc)).await);
+        } else if let Some(cf_domain) = proxies.first() {
+            let ws_host = cf_proxy_ws_domain(cf_domain, dc, false);
+            let label = format!("DC{dc} proxy {ws_host}");
+            probes.push(probe_wss(&label, probe_cf_proxy(cf_domain, &ws_host)).await);
+        } else {
+            eprintln!("  DC{dc}: no worker/proxy — direct-blocked DC will fail on this network");
+        }
     }
 
     if let Some(sni) = crate::fronting::fronting_sni() {

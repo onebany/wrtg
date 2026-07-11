@@ -1,8 +1,9 @@
 # wrtg configuration — /etc/wrtg/config
 #
 # Apply changes:
-#   /etc/init.d/wrtg restart   # apply daemon configuration changes
-#   /etc/init.d/wrtg reload    # alias for restart (kept for OpenWrt convention)
+#   /etc/init.d/wrtg reload    # live-apply front/domains/DC-learn via SIGHUP
+#                              # (no dropped sessions); use for most edits
+#   /etc/init.d/wrtg restart   # full restart — needed for LISTEN / nftables
 #   /etc/wrtg/update-cidr.sh   # refresh Telegram CIDR + nft only
 #
 # Windows-edited configs (CRLF) are handled automatically.

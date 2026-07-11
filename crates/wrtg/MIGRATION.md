@@ -14,6 +14,13 @@
 
 ## Recent behavior changes
 
+### 0.5.13
+
+- **MTProto-over-HTTP `:80` Host header** — local `FRONT_IP` passthrough keeps the
+  client's `Host: <dc-ip>:80` for regular DCs; `kws{N}` rewrite applies only to
+  blocked media CDN / curated media alt IPs. Worker passthrough tunnels to the
+  real DC IP (not `FRONT_IP:80`). Passthrough responses log HTTP status at INFO.
+
 ### 0.5.2
 
 - **`wrtg --check`** — standalone connectivity probe; does not start the daemon.

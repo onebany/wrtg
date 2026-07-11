@@ -32,6 +32,23 @@ function set_key(text, key, val) {
 	return joined;
 }
 
+// Reduce pasted Worker/proxy URLs to bare hosts (mirrors the daemon's
+// parse_domain_list): "https://w.workers.dev/apiws, w2.dev" -> "w.workers.dev,w2.dev".
+// Prevents the "Name does not resolve" TLS SNI failure from a pasted URL.
+function sanitize_domains(v) {
+	let out = [];
+	for (let part in split(v ?? '', /[,;\s]+/)) {
+		part = trim(part);
+		if (!length(part)) continue;
+		let m = match(part, /^[A-Za-z]+:\/\/(.*)$/);
+		if (m) part = m[1];
+		part = split(part, /[\/?#]/)[0];
+		part = trim(replace(part, /\.+$/, ''));
+		if (length(part)) push(out, part);
+	}
+	return join(',', out);
+}
+
 function cfg_val(text, key) {
 	let pfx = key + '=';
 	for (let line in split(text ?? '', /\n/)) {
@@ -51,7 +68,10 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 		let text = readfile(cfg_path) ?? '';
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN']) {
 			let v = http.formvalue(k);
-			if (v != null) text = set_key(text, k, trim(v));
+			if (v == null) continue;
+			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
+				v = sanitize_domains(v);
+			text = set_key(text, k, trim(v));
 		}
 		writefile(cfg_path, text);
 		system('chmod 600 /etc/wrtg/config');
@@ -77,8 +97,30 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 			}
 			system('rm -f /tmp/wrtg-config.validate');
 		}
+	} else if (form == 'forget') {
+		writefile('/etc/wrtg/dc-ips-learned.txt', '');
+		system('/etc/init.d/wrtg reload >/dev/null 2>&1');
+		msg = _('Learned DC map cleared and reloaded.');
+	} else if (form == 'dcadd') {
+		let ip = trim(http.formvalue('dc_ip') ?? '');
+		let dc = trim(http.formvalue('dc_num') ?? '');
+		let media = http.formvalue('dc_media') == '1' ? ' media' : '';
+		if (match(ip, /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/) && match(dc, /^(203|[1-5])$/)) {
+			let cur = readfile('/etc/wrtg/dc-ips.txt') ?? '';
+			if (length(cur) && substr(cur, length(cur) - 1) != '\n')
+				cur += '\n';
+			writefile('/etc/wrtg/dc-ips.txt', cur + ip + ' ' + dc + media + '\n');
+			system('/etc/init.d/wrtg reload >/dev/null 2>&1');
+			msg = _('Added mapping ') + ip + ' → DC' + dc + _(' and reloaded.');
+		} else {
+			msg = _('Invalid IP or DC (expect IPv4 and DC 1-5 or 203).');
+			msg_ok = false;
+		}
 	}
-	if (saved && http.formvalue('_restart') == '1') {
+	if (saved && http.formvalue('_reload') == '1') {
+		system('/etc/init.d/wrtg reload >/dev/null 2>&1');
+		msg += ' ' + _('Config reloaded live (SIGHUP).');
+	} else if (saved && http.formvalue('_restart') == '1') {
 		system('/etc/init.d/wrtg restart >/dev/null 2>&1');
 		msg += ' ' + _('Service restarted.');
 	}
@@ -126,7 +168,7 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		<div class="cbi-value">
 			<label class="cbi-value-title">CF_WORKER_DOMAIN</label>
 			<div class="cbi-value-field"><input type="text" name="CF_WORKER_DOMAIN" value="{{ cur_worker }}" placeholder="name.username.workers.dev" style="width:30em" />
-				<div class="cbi-value-description">Адрес вашего Worker (через запятую — несколько). Пусто = без Worker.</div></div>
+				<div class="cbi-value-description">Адрес вашего Worker (через запятую — несколько). Пусто = без Worker. Можно вставить полный URL — <code>https://…/</code> обрежется автоматически.</div></div>
 		</div>
 		<div class="cbi-value">
 			<label class="cbi-value-title">WRTG_CF_WORKER_TOKEN</label>
@@ -175,8 +217,29 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		</div>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_reload" value="1">{{ _('Save & Reload') }}</button>
 			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
 		</div>
+		<p style="font-size:12px;opacity:.6">{{ _('Reload (SIGHUP) applies front/domains live without dropping sessions; Restart also re-applies LISTEN/nftables.') }}</p>
+	</form>
+</div>
+
+<div class="cbi-section" style="border:1px solid var(--border-color-medium,#4a4a4a);border-radius:8px;padding:14px 16px;margin-bottom:14px">
+	<h3 style="margin-top:0">{{ _('DC → IP learning') }}</h3>
+	<p style="font-size:13px;opacity:.75">{{ _('wrtg auto-learns which DC each Telegram IP belongs to. Add a manual override, or clear the learned map if it picked up a bad mapping. Both reload live.') }}</p>
+	<form method="post" action="{{ url }}" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="dcadd" />
+		<input type="text" name="dc_ip" placeholder="149.154.167.35" style="width:14em" />
+		<label>DC <input type="text" name="dc_num" placeholder="2" style="width:4em" /></label>
+		<label><input type="checkbox" name="dc_media" value="1" /> media</label>
+		<button class="cbi-button cbi-button-apply" type="submit">{{ _('Add mapping') }}</button>
+	</form>
+	<form method="post" action="{{ url }}" onsubmit="return confirm('{{ _('Clear all learned DC mappings?') }}')">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="forget" />
+		<button class="cbi-button cbi-button-remove" type="submit">{{ _('Forget learned map') }}</button>
+		<small style="opacity:.6;margin-left:8px">/etc/wrtg/dc-ips-learned.txt</small>
 	</form>
 </div>
 

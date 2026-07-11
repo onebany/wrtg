@@ -250,7 +250,8 @@ mod tests {
 
     #[test]
     fn read_full_http_request_needs_body() {
-        let headers = b"POST /api HTTP/1.1\r\nHost: 149.154.171.255:80\r\nContent-Length: 8\r\n\r\n";
+        let headers =
+            b"POST /api HTTP/1.1\r\nHost: 149.154.171.255:80\r\nContent-Length: 8\r\n\r\n";
         let body = b"deadbeef";
         assert_eq!(parse_http_content_length(headers), Some(8));
         let mut full = headers.to_vec();

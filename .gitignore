@@ -1,6 +1,10 @@
 # Rust build artifacts
 target/
 dist/
+bundle/
+
+# Local reference implementations (not part of the project)
+.ref/
 
 # Captures / debug
 *.pcap

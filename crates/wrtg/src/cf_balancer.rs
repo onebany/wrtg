@@ -126,8 +126,20 @@ pub fn parse_domain_list(raw: &str) -> Vec<String> {
     raw.split([',', ';', ' '])
         .map(|s| s.trim().trim_matches('"').trim_matches('\r'))
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(sanitize_domain)
+        .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// Reduce a pasted value to a bare host for TLS SNI: `https://x.dev/apiws` → `x.dev`.
+/// Users routinely paste a Worker URL with scheme and a trailing slash; feeding
+/// that to `connect_ws` fails ("Name does not resolve") or gets silently dropped
+/// by domain validation. Strip scheme, path, query, and trailing dots.
+fn sanitize_domain(s: &str) -> String {
+    let s = s.trim();
+    let s = s.split_once("://").map_or(s, |(_, rest)| rest);
+    let host = s.split(['/', '?', '#']).next().unwrap_or(s);
+    host.trim().trim_end_matches('.').to_string()
 }
 
 #[cfg(test)]
@@ -143,6 +155,22 @@ mod tests {
                 "a.example.com".to_string(),
                 "b.example.com".to_string(),
                 "c.example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_domain_list_strips_scheme_and_path() {
+        // The exact shape users paste from the Cloudflare dashboard.
+        let v = parse_domain_list(
+            "https://w1.workers.dev/, w2.workers.dev , wss://w3.workers.dev/apiws",
+        );
+        assert_eq!(
+            v,
+            vec![
+                "w1.workers.dev".to_string(),
+                "w2.workers.dev".to_string(),
+                "w3.workers.dev".to_string(),
             ]
         );
     }

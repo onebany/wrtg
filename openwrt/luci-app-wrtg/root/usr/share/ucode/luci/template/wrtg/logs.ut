@@ -39,6 +39,12 @@ let url = dispatcher.build_url('admin', 'services', 'wrtg', 'logs');
 		<a class="cbi-button" href="{{ url }}">{{ _('Clear') }}</a>
 		<label style="font-size:13px"><input type="checkbox" id="wrtg-logauto"> {{ _('auto 5s') }}</label>
 	</form>
+	<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+		<span style="font-size:12px;opacity:.6;align-self:center">{{ _('Quick filter:') }}</span>
+		{% for (let f in ['DC1','DC2','DC3','DC4','DC5','CF worker','passthrough','302','failed','handshake']) { %}
+		<a class="cbi-button" style="padding:2px 9px;font-size:12px{{ q == f ? ';background:var(--primary,#2e7d32);color:#fff' : '' }}" href="{{ url }}?q={{ replace(f, ' ', '+') }}&n={{ n }}">{{ f }}</a>
+		{% } %}
+	</div>
 </div>
 
 <pre id="wrtg-log" style="white-space:pre-wrap;font-size:12px;line-height:1.4;max-height:70vh;overflow:auto;padding:10px;background:var(--background-color-high,#1e1e1e);border:1px solid var(--border-color-medium,#444);border-radius:6px">{{ entityencode(logs) }}</pre>
