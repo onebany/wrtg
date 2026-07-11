@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Fixed
+- **`uninstall.sh` left files behind** — the cron-removal line
+  (`sed … || grep … > tmp && mv`) parsed as `(sed || grep) && mv`; on OpenWrt
+  `sed -i` succeeds, so `grep` was skipped, the temp file was never created, and
+  `mv` failed — aborting the script under `set -e` **before** the binary/init/
+  config were removed. Rewritten as an explicit `if/elif/else`.
+- **CF-proxy parallel fallback leaked connections** — the losing race tasks were
+  awaited in spawn order (not a real latency race) and, once a winner was found,
+  the remaining `JoinHandle`s were dropped, which *detaches* rather than cancels
+  them; a sibling that then completed its WSS connect leaked a half-open session.
+  Now uses `JoinSet`: first-to-connect wins, losers are aborted, and any that
+  connected anyway are closed with a proper close frame.
+- **SIGHUP reload data race** — live reload wrote the config file back into the
+  process environment via `env::set_var` while worker tasks concurrently read it
+  (UB on glibc). Reload now parses the file into a map and builds the config from
+  it directly, never mutating the environment. This also makes the file
+  authoritative: a key deleted from the config now reverts to its default instead
+  of lingering from the previous load.
+- **Fronting result was discarded** — when the direct WS path was all-blocked and
+  the fronting fallback then failed, the fronting attempt's block/timeout signal
+  was computed but ignored, so a DC could be blacklisted for 45 min despite
+  fronting showing it was still partially reachable. The two attempts are now
+  folded together.
+- **`get_original_dst` mis-parsed non-IPv4** — `SO_ORIGINAL_DST` was always read
+  as a `sockaddr_in`; a non-`AF_INET` result yielded a garbage IP/port. It now
+  checks the address family and reports unknown destinations instead.
+- **`blind_relay` could park on a half-open client** — after the remote side
+  finished, the client→remote copy task was awaited unconditionally, so a client
+  holding its socket open idle kept the task/connection alive forever. It is now
+  torn down like the MTProto/TCP bridges (abort + reap).
+
 ## 0.5.16 — 2026-07-10
 
 ### Added

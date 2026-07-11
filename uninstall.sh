@@ -28,9 +28,16 @@ nft delete table inet tg_tproxy 2>/dev/null || true
 
 CRON_FILE="/etc/crontabs/root"
 if [ -f "$CRON_FILE" ]; then
-	sed -i '/wrtg\/update-cidr\.sh/d' "$CRON_FILE" 2>/dev/null || \
-		grep -v 'wrtg/update-cidr.sh' "$CRON_FILE" > "${CRON_FILE}.tmp" && \
+	# Drop the update-cidr cron line. Prefer in-place sed; if that fails
+	# (e.g. no `sed -i` support), fall back to grep+mv. Kept as an explicit
+	# if/else so `set -e` can't abort the uninstall on the sed success path.
+	if sed -i '/wrtg\/update-cidr\.sh/d' "$CRON_FILE" 2>/dev/null; then
+		:
+	elif grep -v 'wrtg/update-cidr.sh' "$CRON_FILE" > "${CRON_FILE}.tmp"; then
 		mv "${CRON_FILE}.tmp" "$CRON_FILE"
+	else
+		rm -f "${CRON_FILE}.tmp"
+	fi
 fi
 
 rm -f /usr/sbin/wrtg "$INITD"
