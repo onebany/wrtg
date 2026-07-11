@@ -17,6 +17,7 @@ pub mod sockopt;
 pub mod splitter;
 pub mod tls;
 pub mod tls_sni;
+pub mod ttl_map;
 pub mod watchdog;
 pub mod ws;
 pub mod ws_blacklist;
