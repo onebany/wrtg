@@ -445,6 +445,15 @@ pub struct CryptoDown {
     clt_enc: Aes256Ctr,
 }
 
+/// Re-encrypt `input` by running it through two AES-CTR keystreams in order
+/// (decrypt with `a`, re-encrypt with `b`). Shared by every relay direction.
+fn recrypt(a: &mut Aes256Ctr, b: &mut Aes256Ctr, input: &[u8]) -> Vec<u8> {
+    let mut out = input.to_vec();
+    a.apply_keystream(&mut out);
+    b.apply_keystream(&mut out);
+    out
+}
+
 impl CryptoCtx {
     pub fn split(self) -> (CryptoUp, CryptoDown) {
         (
@@ -499,35 +508,23 @@ impl CryptoCtx {
     }
 
     pub fn client_to_telegram(&mut self, input: &[u8]) -> Vec<u8> {
-        let mut out = input.to_vec();
-        self.clt_dec.apply_keystream(&mut out);
-        self.tg_enc.apply_keystream(&mut out);
-        out
+        recrypt(&mut self.clt_dec, &mut self.tg_enc, input)
     }
 
     pub fn telegram_to_client(&mut self, input: &[u8]) -> Vec<u8> {
-        let mut out = input.to_vec();
-        self.tg_dec.apply_keystream(&mut out);
-        self.clt_enc.apply_keystream(&mut out);
-        out
+        recrypt(&mut self.tg_dec, &mut self.clt_enc, input)
     }
 }
 
 impl CryptoUp {
     pub fn client_to_telegram(&mut self, input: &[u8]) -> Vec<u8> {
-        let mut out = input.to_vec();
-        self.clt_dec.apply_keystream(&mut out);
-        self.tg_enc.apply_keystream(&mut out);
-        out
+        recrypt(&mut self.clt_dec, &mut self.tg_enc, input)
     }
 }
 
 impl CryptoDown {
     pub fn telegram_to_client(&mut self, input: &[u8]) -> Vec<u8> {
-        let mut out = input.to_vec();
-        self.tg_dec.apply_keystream(&mut out);
-        self.clt_enc.apply_keystream(&mut out);
-        out
+        recrypt(&mut self.tg_dec, &mut self.clt_enc, input)
     }
 }
 
