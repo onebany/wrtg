@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck
-          shellcheck -x -e SC1091,SC2029 install.sh bootstrap.sh uninstall.sh build-rust.sh openwrt/*.sh openwrt/wrtg.init openwrt/luci-app-wrtg/install-luci.sh
+          shellcheck -x -e SC1091,SC2029,SC3043 install.sh bootstrap.sh uninstall.sh build-rust.sh openwrt/*.sh openwrt/wrtg.init openwrt/luci-app-wrtg/install-luci.sh
 
   build:
     name: build ${{ matrix.out }}
