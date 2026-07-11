@@ -30,11 +30,36 @@ fn doh_cache_ttl() -> Duration {
     *TTL
 }
 
-const DOH_ENDPOINTS: &[(&str, &str)] = &[
-    ("cloudflare-dns.com", "/dns-query"),
-    ("dns.google", "/dns-query"),
-    ("dns.quad9.net", "/dns-query"),
-    ("dns.adguard-dns.com", "/dns-query"),
+struct DohEndpoint {
+    /// TLS SNI + HTTP Host (the cert is validated against this name).
+    host: &'static str,
+    path: &'static str,
+    /// Well-known anycast IPs, dialed directly so DoH does not depend on the
+    /// system resolver it exists to bypass.
+    ips: &'static [&'static str],
+}
+
+const DOH_ENDPOINTS: &[DohEndpoint] = &[
+    DohEndpoint {
+        host: "cloudflare-dns.com",
+        path: "/dns-query",
+        ips: &["1.1.1.1", "1.0.0.1"],
+    },
+    DohEndpoint {
+        host: "dns.google",
+        path: "/dns-query",
+        ips: &["8.8.8.8", "8.8.4.4"],
+    },
+    DohEndpoint {
+        host: "dns.quad9.net",
+        path: "/dns-query",
+        ips: &["9.9.9.9", "149.112.112.112"],
+    },
+    DohEndpoint {
+        host: "dns.adguard-dns.com",
+        path: "/dns-query",
+        ips: &["94.140.14.14", "94.140.15.15"],
+    },
 ];
 
 fn pick_preferred_ip(candidates: &[String]) -> Option<String> {
@@ -52,16 +77,39 @@ fn pick_preferred_ip(candidates: &[String]) -> Option<String> {
     fallback_v6
 }
 
+/// Does this answer record carry DNS type A (value exactly 1)? Guards against
+/// `"type":1` being a prefix of `"type":15/16/18/…`, which would otherwise pull
+/// non-A record data (CNAME/TXT/…) into the address list.
+fn record_is_type_a(rec: &str) -> bool {
+    let mut hay = rec;
+    while let Some(pos) = hay.find("\"type\":1") {
+        let after = &hay[pos + "\"type\":1".len()..];
+        if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            hay = after; // e.g. "type":15 — keep scanning
+        } else {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_doh_a_records(body: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(body);
     let mut out = Vec::new();
-    for chunk in text.split("\"Answer\"").skip(1) {
-        for part in chunk.split("\"type\":1") {
-            if let Some(data) = part.split("\"data\":\"").nth(1) {
-                if let Some(ip) = data.split('"').next() {
-                    if !ip.is_empty() {
-                        out.push(ip.to_string());
-                    }
+    // Only look inside the "Answer" array, then walk each `{…}` record. DoH
+    // answer records are flat objects, so splitting on `{` isolates them.
+    let Some((_, answer)) = text.split_once("\"Answer\"") else {
+        return out;
+    };
+    for rec in answer.split('{').skip(1) {
+        if !record_is_type_a(rec) {
+            continue;
+        }
+        if let Some(data) = rec.split("\"data\":\"").nth(1) {
+            if let Some(ip) = data.split('"').next() {
+                let ip = ip.trim();
+                if !ip.is_empty() {
+                    out.push(ip.to_string());
                 }
             }
         }
@@ -69,25 +117,34 @@ fn parse_doh_a_records(body: &[u8]) -> Vec<String> {
     out
 }
 
-async fn doh_query(host: &str, path: &str, domain: &str) -> Option<String> {
-    let path = format!("{path}?name={domain}&type=A");
-    let body = timeout(
-        DOH_QUERY_TIMEOUT,
-        https_get_json(host, &path, DOH_CONNECT_TIMEOUT),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())?;
-    let ips = parse_doh_a_records(&body);
-    pick_preferred_ip(&ips)
+async fn doh_query(ep: &DohEndpoint, domain: &str) -> Option<String> {
+    let path = format!("{}?name={domain}&type=A", ep.path);
+    for ip in ep.ips {
+        let body = timeout(
+            DOH_QUERY_TIMEOUT,
+            https_get_json(ip, ep.host, &path, DOH_CONNECT_TIMEOUT),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+        if let Some(body) = body {
+            if let Some(resolved) = pick_preferred_ip(&parse_doh_a_records(&body)) {
+                return Some(resolved);
+            }
+        }
+    }
+    None
 }
 
 async fn https_get_json(
+    connect_ip: &str,
     host: &str,
     path: &str,
     connect_timeout: Duration,
 ) -> std::io::Result<Vec<u8>> {
-    let addr = format!("{host}:443");
+    // Dial the pinned IP directly; TLS SNI + Host stay the hostname, so the
+    // certificate is still validated against the real resolver name.
+    let addr = format!("{connect_ip}:443");
     let tcp = timeout(connect_timeout, TcpStream::connect(&addr)).await??;
     crate::sockopt::tune_tcp(&tcp);
 
@@ -158,17 +215,11 @@ pub async fn resolve_doh(domain: &str) -> Option<String> {
     let (tx, mut rx) = mpsc::channel(DOH_ENDPOINTS.len() + 1);
     let mut tasks = Vec::new();
 
-    for (host, path) in DOH_ENDPOINTS {
+    for ep in DOH_ENDPOINTS {
         let tx = tx.clone();
         let domain = domain.to_string();
-        let host = host.to_string();
-        let path = path.to_string();
         tasks.push(tokio::spawn(async move {
-            if let Some(ip) = doh_query(&host, &path, &domain).await {
-                let _ = tx.send(Some(ip)).await;
-            } else {
-                let _ = tx.send(None).await;
-            }
+            let _ = tx.send(doh_query(ep, &domain).await).await;
         }));
     }
 
@@ -229,6 +280,29 @@ mod tests {
         let json = br#"{"Status":0,"Answer":[{"name":"x.co.uk","type":1,"TTL":300,"data":"104.21.75.42"}]}"#;
         let ips = parse_doh_a_records(json);
         assert_eq!(ips, vec!["104.21.75.42".to_string()]);
+    }
+
+    #[test]
+    fn parse_doh_a_records_skips_non_a_records() {
+        // A CNAME (type 5) plus a TXT (type 16, whose "type":16 starts with
+        // "type":1) precede the real A record; only the A address is returned.
+        let json = br#"{"Answer":[
+            {"name":"x.co.uk","type":5,"data":"alias.example."},
+            {"name":"x.co.uk","type":16,"data":"v=spf1 -all"},
+            {"name":"x.co.uk","type":1,"data":"104.21.75.42"}
+        ]}"#;
+        let ips = parse_doh_a_records(json);
+        assert_eq!(ips, vec!["104.21.75.42".to_string()]);
+    }
+
+    #[test]
+    fn parse_doh_a_records_multiple_a() {
+        let json = br#"{"Answer":[
+            {"type":1,"data":"1.1.1.1"},
+            {"type":1,"data":"2.2.2.2"}
+        ]}"#;
+        let ips = parse_doh_a_records(json);
+        assert_eq!(ips, vec!["1.1.1.1".to_string(), "2.2.2.2".to_string()]);
     }
 
     #[test]

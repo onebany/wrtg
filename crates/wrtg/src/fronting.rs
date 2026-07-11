@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 
 use crate::mtproto::ws_domains;
-use crate::ws::{connect_ws_fronted, is_ws_redirect, RawWebSocket};
+use crate::ws::{connect_ws_fronted, is_ws_redirect_err, RawWebSocket};
 
 const DEFAULT_COOLDOWN_SEC: u64 = 1800;
 
@@ -119,9 +119,10 @@ pub async fn try_ws_fronting(
                 continue;
             }
             Ok(Err(e)) => {
+                let redirect = is_ws_redirect_err(&e);
                 let io_err = e.into_io();
                 log::warn!("[{label}] DC{dc} fronting {domain} failed: {io_err}");
-                if !is_ws_redirect(&io_err) {
+                if !redirect {
                     all_blocked = false;
                 }
                 if io_err.kind() == std::io::ErrorKind::TimedOut {

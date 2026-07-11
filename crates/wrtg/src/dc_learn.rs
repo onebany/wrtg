@@ -122,16 +122,27 @@ pub fn learn(ip: &str, dc: i32, is_media: bool) {
 }
 
 /// Append a single learned entry to the persist file (best-effort).
+///
+/// Offloaded to the blocking thread pool so the synchronous file write never
+/// stalls a reactor worker mid-handshake (routers run on slow flash). Falls back
+/// to a direct write when no Tokio runtime is present (unit tests).
 fn persist(ip: &str, dc: i32, is_media: bool) {
     let path = learn_file();
     let tag = if is_media { " media" } else { "" };
-    match OpenOptions::new().create(true).append(true).open(&path) {
+    let line = format!("{ip} {dc}{tag}");
+    let write = move || match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(mut f) => {
-            if let Err(e) = writeln!(f, "{ip} {dc}{tag}") {
+            if let Err(e) = writeln!(f, "{line}") {
                 log::warn!("dc_learn: append to {path} failed: {e}");
             }
         }
         Err(e) => log::warn!("dc_learn: open {path} failed: {e}"),
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => {
+            tokio::task::spawn_blocking(write);
+        }
+        Err(_) => write(),
     }
 }
 

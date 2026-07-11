@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed
+- **Connection cap** — the accept loop now bounds simultaneously-served
+  connections with a semaphore (default 1024, `WRTG_MAX_CONNS`), applying
+  backpressure instead of spawning unbounded tasks/buffers under a flood.
+- **Non-blocking DC-learn persist** — the learned-IP file append is offloaded to
+  the blocking thread pool so it can't stall a reactor worker mid-handshake on
+  slow router flash.
+- **DoH resolvers are IP-pinned** — Cloudflare/Google/Quad9/AdGuard are now dialed
+  on their well-known anycast IPs (SNI/Host unchanged, cert still validated), so
+  the DNS-over-HTTPS fallback no longer depends on the system resolver it exists
+  to bypass.
+- **Bounded rebind backoff** — a persistently unbindable listening socket now
+  backs off exponentially (capped at 30s) instead of retrying every ~200ms.
+- **Robust redirect / DoH parsing** — WS redirect detection uses the typed
+  handshake status code instead of substring-matching the error text, and the
+  DoH A-record parser no longer treats `"type":1` as a prefix of `"type":15/16`
+  (which could pull CNAME/TXT data into the address list).
+
 ### Fixed
 - **`uninstall.sh` left files behind** — the cron-removal line
   (`sed … || grep … > tmp && mv`) parsed as `(sed || grep) && mv`; on OpenWrt
