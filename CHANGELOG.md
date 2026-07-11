@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### CI / Supply chain
+- **Fail-closed checksum verification** — `bootstrap.sh` now aborts if
+  `sha256sum` is missing or `SHA256SUMS` can't be fetched, instead of silently
+  installing unverified. The release binary in the fallback path is now verified
+  too (previously unchecked). `WRTG_INSECURE=1` restores the old skip-on-missing
+  behaviour; a checksum *mismatch* always aborts.
+- **Faster, cached CI** — both workflows use `Swatinem/rust-cache` and install
+  `cargo-zigbuild` from a prebuilt binary (`taiki-e/install-action`) instead of
+  compiling it from source on every job.
+- **CF Worker checks** — CI runs `node --check openwrt/cf-worker.js` and a new
+  `openwrt/check-cidr-sync.sh` that fails if the Worker's hardcoded
+  `TELEGRAM_CIDRS` drifts from the router-side `default_cidrs()` in `lib.sh`.
+- **Dependabot** — weekly grouped updates for Cargo deps and GitHub Actions.
+- **Optional Gitea release mirror** — `release.yml` can also publish the
+  binaries, bundle, `SHA256SUMS`, and `bootstrap.sh` to the Gitea host that the
+  default install path uses; runs only when a `GITEA_TOKEN` secret is set.
+
 ### Changed
 - **Connection cap** — the accept loop now bounds simultaneously-served
   connections with a semaphore (default 1024, `WRTG_MAX_CONNS`), applying

@@ -20,6 +20,9 @@ BASE="${WRTG_BASE_URL:-${WRTG_RELEASE_URL:-$DEFAULT_BASE}}"
 VER="${VER:-latest}"
 BUNDLE="wrtg-openwrt.tar.gz"
 TMP="/tmp/wrtg-install"
+# Checksum verification is fail-closed. Set WRTG_INSECURE=1 to downgrade a
+# missing sha256sum tool / missing SHA256SUMS to a warning (not recommended).
+INSECURE="${WRTG_INSECURE:-0}"
 
 err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
@@ -112,23 +115,35 @@ detect_arch() {
 	esac
 }
 
-verify_bundle_checksum() { # ver bundle_path
+# Verify a downloaded file against the release SHA256SUMS. Fails closed: a
+# missing sha256sum tool or a missing/incomplete SHA256SUMS aborts the install
+# (this is a root-level installer). WRTG_INSECURE=1 downgrades those two cases
+# to a warning; a checksum *mismatch* always aborts regardless.
+verify_checksum() { # ver file_path
 	_ver="$1"
-	_bundle_path="$2"
-	_sum_url="$(bundle_url "$_ver" SHA256SUMS)"
-	_bundle="$(basename "$_bundle_path")"
-	command -v sha256sum >/dev/null 2>&1 || {
-		warn "sha256sum not found — skipping checksum verification"
-		return 0
-	}
-	if ! fetch_optional "$_sum_url" "$TMP/SHA256SUMS"; then
-		warn "SHA256SUMS not found — skipping checksum verification"
+	_file_path="$2"
+	_file="$(basename "$_file_path")"
+
+	if ! command -v sha256sum >/dev/null 2>&1; then
+		[ "$INSECURE" = "1" ] || err "sha256sum not found — cannot verify $_file; install it or re-run with WRTG_INSECURE=1"
+		warn "sha256sum not found — skipping checksum verification (WRTG_INSECURE=1)"
 		return 0
 	fi
-	_expected="$(awk -v f="$_bundle" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
-	[ -n "$_expected" ] || err "$_bundle missing from SHA256SUMS"
-	_actual="$(sha256sum "$_bundle_path" | awk '{print $1}')"
-	[ "$_actual" = "$_expected" ] || err "bundle checksum mismatch"
+
+	if [ ! -f "$TMP/SHA256SUMS" ]; then
+		_sum_url="$(bundle_url "$_ver" SHA256SUMS)"
+		if ! fetch_optional "$_sum_url" "$TMP/SHA256SUMS"; then
+			[ "$INSECURE" = "1" ] || err "SHA256SUMS not found at $_sum_url — refusing to install unverified $_file (set WRTG_INSECURE=1 to override)"
+			warn "SHA256SUMS not found — skipping checksum verification (WRTG_INSECURE=1)"
+			return 0
+		fi
+	fi
+
+	_expected="$(awk -v f="$_file" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
+	[ -n "$_expected" ] || err "$_file missing from SHA256SUMS"
+	_actual="$(sha256sum "$_file_path" | awk '{print $1}')"
+	[ "$_actual" = "$_expected" ] || err "$_file checksum mismatch (expected $_expected, got $_actual)"
+	echo "wrtg: verified $_file (sha256 ok)"
 }
 
 find_install_dir() { # root -> echoes dir containing install.sh
@@ -147,7 +162,7 @@ install_from_bundle() { # ver
 	_url="$(bundle_url "$_ver" "$BUNDLE")"
 	echo "wrtg: downloading bundle $_ver ..."
 	fetch "$_url" "$TMP/$BUNDLE" || return 1
-	verify_bundle_checksum "$_ver" "$TMP/$BUNDLE"
+	verify_checksum "$_ver" "$TMP/$BUNDLE"
 	tar -xzf "$TMP/$BUNDLE" -C "$TMP" || err "extract failed"
 	_dir="$(find_install_dir "$TMP")" || err "install.sh not found in bundle"
 	echo "wrtg: installing ..."
@@ -163,6 +178,7 @@ install_from_binary() { # ver
 
 	echo "wrtg: bundle not found — using release binary + source ($_arch) ..."
 	fetch "$_bin_url" "$TMP/$_bin" || err "binary download failed ($_bin_url)"
+	verify_checksum "$_ver" "$TMP/$_bin"
 	chmod +x "$TMP/$_bin"
 
 	fetch "$_arch_url" "$TMP/src.tar.gz" || err "source archive download failed ($_arch_url)"
