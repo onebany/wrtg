@@ -19,6 +19,8 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Verify source
         run: |
           test "$(cat VERSION)" = "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wrtg") | .version')"
@@ -31,6 +33,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck
           shellcheck -x -e SC1091,SC2029,SC3043 install.sh bootstrap.sh uninstall.sh build-rust.sh openwrt/*.sh openwrt/wrtg.init openwrt/luci-app-wrtg/install-luci.sh
+
+      - name: Check CF Worker
+        run: |
+          node --check openwrt/cf-worker.js
+          sh openwrt/check-cidr-sync.sh
 
   build:
     name: build ${{ matrix.out }}
@@ -64,10 +71,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - uses: mlugg/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
@@ -89,6 +102,11 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    env:
+      # Optional: set this repo secret to also publish to the Gitea host that the
+      # default bootstrap.sh install path targets. Absent → the Gitea step is
+      # skipped and only the GitHub release is created (previous behaviour).
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -121,3 +139,30 @@ jobs:
             dist/wrtg-openwrt.tar.gz
             bootstrap.sh
             dist/SHA256SUMS
+
+      # Mirror the release to the Gitea host (the default install target in
+      # bootstrap.sh / README). Runs only when GITEA_TOKEN is configured, so it
+      # never affects the GitHub-only flow. Override the host via GITEA_API.
+      - name: Publish to Gitea
+        if: ${{ env.GITEA_TOKEN != '' }}
+        env:
+          GITEA_API: ${{ vars.GITEA_API || 'https://git.onebany.dedyn.io/api/v1/repos/bany/wrtg' }}
+        run: |
+          set -eu
+          TAG="${GITHUB_REF#refs/tags/}"
+          auth="Authorization: token $GITEA_TOKEN"
+          # Reuse the release for this tag if it already exists, else create it.
+          rid="$(curl -fsSL -H "$auth" "$GITEA_API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
+          if [ -z "$rid" ]; then
+            rid="$(curl -fsSL -X POST -H "$auth" -H 'Content-Type: application/json' \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" \
+              "$GITEA_API/releases" | jq -r '.id')"
+          fi
+          for f in dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm \
+                   dist/wrtg-openwrt.tar.gz dist/SHA256SUMS bootstrap.sh; do
+            name="$(basename "$f")"
+            curl -fsSL -X POST -H "$auth" \
+              -F "attachment=@$f;filename=$name" \
+              "$GITEA_API/releases/$rid/assets?name=$name" >/dev/null
+            echo "uploaded $name to Gitea release $TAG"
+          done
