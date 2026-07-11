@@ -62,8 +62,13 @@ mod tests {
     use std::thread;
     use std::time::Duration as StdDuration;
 
+    // Both tests mutate the global BLACKLIST; serialize them so one's reset()
+    // can't wipe the other's entries mid-run.
+    static TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn blacklist_roundtrip() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         reset_blacklist_for_test();
         assert!(!ws_blacklisted(2, false));
         mark_ws_blacklisted(2, false);
@@ -73,6 +78,7 @@ mod tests {
 
     #[test]
     fn blacklist_ttl_expiry() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         reset_blacklist_for_test();
         std::env::set_var("WRTG_WS_BLACKLIST_TTL_SEC", "1");
         // Force re-read on next mark (OnceLock already set in prior tests — use fresh DC).

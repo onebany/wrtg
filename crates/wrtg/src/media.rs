@@ -88,10 +88,8 @@ fn replace_http_host(data: &[u8], new_host: &str) -> Option<Vec<u8>> {
     let lower: Vec<u8> = data.iter().map(|b| b.to_ascii_lowercase()).collect();
     let line_start = if let Some(i) = lower.windows(7).position(|w| w == b"\r\nhost:") {
         i + 2
-    } else if let Some(i) = lower.windows(6).position(|w| w == b"\nhost:") {
-        i + 1
     } else {
-        return None;
+        lower.windows(6).position(|w| w == b"\nhost:")? + 1
     };
     let rest = &data[line_start..];
     let colon = rest.iter().position(|&b| b == b':')?;
