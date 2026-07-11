@@ -1,6 +1,6 @@
 [package]
 name = "wrtg"
-version = "0.5.10"
+version = "0.5.16"
 edition = "2021"
 description = "Telegram MTProto transparent proxy (Rust port of tg-tproxy)"
 license = "MIT"
@@ -18,7 +18,7 @@ env_logger = "0.11"
 log = "0.4"
 rand = "0.8"
 socket2 = { version = "0.5", features = ["all"] }
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 webpki-roots = "1.0.8"

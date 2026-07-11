@@ -45,11 +45,17 @@ pub fn load_from_env() -> WrtgConfig {
 }
 
 /// DCs the global FRONT_IP applies to. Default `2,4` (the stock front only
-/// fronts DC2/DC4). `all`/`*` → 1-5; `none`/empty → direct-only for all DCs.
+/// fronts DC2/DC4). `all`/`*` → 1-5; `none` → direct-only for all DCs.
+///
+/// An empty value is treated as unset (→ default `2,4`), not as `none`: the
+/// shell config seeds `WRTG_FRONT_DCS=""` and procd drops empty env vars, so the
+/// daemon runs on the default — but `wrtg --check` via `set -a && load_config`
+/// exports the empty string. Treating empty as the default keeps both paths in
+/// agreement. Use `none` to actually disable fronting.
 fn load_front_dcs() -> Vec<i32> {
     match env::var("WRTG_FRONT_DCS") {
-        Ok(v) => parse_front_dcs(&v),
-        Err(_) => vec![2, 4],
+        Ok(v) if !v.trim().trim_matches('\r').trim().is_empty() => parse_front_dcs(&v),
+        _ => vec![2, 4],
     }
 }
 
@@ -139,6 +145,72 @@ pub fn apply_config(cfg: &WrtgConfig) {
     set_proxy_domains(cfg.cf_proxy_domains.clone());
 }
 
+const DEFAULT_CONFIG_FILE: &str = "/etc/wrtg/config";
+
+pub fn config_file_path() -> String {
+    env::var("WRTG_CONFIG_FILE").unwrap_or_else(|_| DEFAULT_CONFIG_FILE.to_string())
+}
+
+/// Read `KEY=VALUE` lines from the shell config file into the process env, so a
+/// following `load_from_env()` reflects on-disk edits. Used by the SIGHUP reload:
+/// the daemon's env is frozen at launch, but the file is the source of truth.
+/// Approximates shell quoting well enough for the values LuCI / the defaults write.
+pub fn import_config_file(path: &str) -> usize {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    let mut n = 0;
+    for line in text.lines() {
+        if let Some((key, val)) = parse_kv_line(line) {
+            env::set_var(key, val);
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Parse one shell `KEY=VALUE` config line. `None` for blanks/comments/invalid
+/// keys. Approximates shell quoting: strips one layer of matching quotes, else
+/// takes the first whitespace-delimited token (dropping trailing comments).
+fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, raw) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let raw = raw.trim();
+    let val = if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw.split_whitespace().next().unwrap_or("")
+    };
+    Some((key, val))
+}
+
+/// Re-read the config file and re-apply front/domains + reload the DC-learn map,
+/// without touching the listener. Triggered by SIGHUP (`/etc/init.d/wrtg reload`).
+pub fn reload_from_file() {
+    let path = config_file_path();
+    let keys = import_config_file(&path);
+    let cfg = load_from_env();
+    apply_config(&cfg);
+    crate::dc_learn::load();
+    log::info!(
+        "reloaded config from {path} ({keys} keys): front-ip={} front-dcs={:?} cf-workers={} cf-proxies={}",
+        cfg.front_ip,
+        cfg.front_dcs,
+        cfg.cf_worker_domains.len(),
+        cfg.cf_proxy_domains.len()
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +225,26 @@ mod tests {
         assert!(parse_front_dcs("").is_empty());
         assert_eq!(parse_front_dcs("2,2,4"), vec![2, 4]); // dedup
         assert_eq!(parse_front_dcs("0,2,6,203"), vec![2, 203]);
+    }
+
+    #[test]
+    fn parse_kv_line_cases() {
+        assert_eq!(
+            parse_kv_line("FRONT_IP=149.154.167.220"),
+            Some(("FRONT_IP", "149.154.167.220"))
+        );
+        assert_eq!(
+            parse_kv_line("CF_WORKER_DOMAIN=\"a.dev,b.dev\""),
+            Some(("CF_WORKER_DOMAIN", "a.dev,b.dev"))
+        );
+        // Unquoted value with a trailing comment ends at the first token.
+        assert_eq!(
+            parse_kv_line("WRTG_WS_POOL_SIZE=2   # default"),
+            Some(("WRTG_WS_POOL_SIZE", "2"))
+        );
+        assert_eq!(parse_kv_line("  # a comment"), None);
+        assert_eq!(parse_kv_line(""), None);
+        assert_eq!(parse_kv_line("not a config line"), None);
+        assert_eq!(parse_kv_line("EMPTY="), Some(("EMPTY", "")));
     }
 }
