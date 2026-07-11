@@ -1,36 +1,20 @@
-//! Pre-established WebSocket pool per (DC, media) for faster bridge setup.
+//! Pre-established direct-WebSocket pool per (DC, media) for faster bridge setup.
+//! Thin wiring over [`crate::conn_pool::Pool`].
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::Duration;
 
-use tokio::sync::Mutex;
-use tokio::time::{interval, timeout};
+use tokio::time::timeout;
 
+use crate::conn_pool::{ConnectFuture, Pool};
 use crate::mtproto::{dc_front_ip, ws_domains, ws_target_ip};
 use crate::ws::{connect_ws, RawWebSocket};
-
-type PoolKey = (i32, bool);
-
-struct PooledConn {
-    ws: RawWebSocket,
-    created: Instant,
-    domain: String,
-}
-
-static POOLS: LazyLock<Mutex<HashMap<PoolKey, Vec<PooledConn>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const DEFAULT_POOL_SIZE: usize = 2;
 const MAX_POOL_SIZE: usize = 8;
 const DEFAULT_POOL_TTL_SEC: u64 = 120;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REFILL_INTERVAL: Duration = Duration::from_secs(30);
-
-pub struct PooledWs {
-    pub ws: RawWebSocket,
-    pub domain: String,
-}
 
 fn pool_size() -> usize {
     static SIZE: OnceLock<usize> = OnceLock::new();
@@ -54,153 +38,70 @@ fn pool_ttl() -> Duration {
     })
 }
 
-fn is_expired(created: Instant) -> bool {
-    created.elapsed() > pool_ttl()
+/// Non-media direct WS only makes sense for DCs that have a front target.
+fn enabled() -> bool {
+    (1..=5).any(|dc| !dc_front_ip(dc).is_empty())
 }
 
-fn prune_expired(conns: &mut Vec<PooledConn>) {
-    let before = conns.len();
-    conns.retain(|c| !is_expired(c.created));
-    let dropped = before.saturating_sub(conns.len());
-    if dropped > 0 {
-        log::debug!("ws pool: dropped {dropped} expired connection(s)");
-    }
-}
-
-async fn connect_one(dc: i32, is_media: bool, target_ip: &str) -> Option<PooledConn> {
-    for domain in ws_domains(dc, is_media) {
-        match timeout(
-            CONNECT_TIMEOUT,
-            connect_ws(target_ip, &domain, "/apiws", CONNECT_TIMEOUT),
-        )
-        .await
-        {
-            Ok(Ok(ws)) => {
-                return Some(PooledConn {
-                    ws,
-                    created: Instant::now(),
-                    domain,
-                });
-            }
-            Ok(Err(e)) => {
-                log::debug!("ws pool: DC{dc} {domain} failed: {e}");
-            }
-            Err(_) => {
-                log::debug!("ws pool: DC{dc} {domain} timeout");
+fn connect(dc: i32, is_media: bool, hint: String) -> ConnectFuture {
+    Box::pin(async move {
+        let target = if hint.is_empty() {
+            ws_target_ip(dc, "")
+        } else {
+            hint
+        };
+        if target.is_empty() {
+            return None;
+        }
+        for domain in ws_domains(dc, is_media) {
+            match timeout(
+                CONNECT_TIMEOUT,
+                connect_ws(&target, &domain, "/apiws", CONNECT_TIMEOUT),
+            )
+            .await
+            {
+                Ok(Ok(ws)) => return Some((ws, domain)),
+                Ok(Err(e)) => log::debug!("ws pool: DC{dc} {domain} failed: {e}"),
+                Err(_) => log::debug!("ws pool: DC{dc} {domain} timeout"),
             }
         }
-    }
-    None
-}
-
-async fn fill_pool(key: PoolKey, target_ip: &str, count: usize) {
-    let (dc, is_media) = key;
-    for _ in 0..count {
-        if let Some(conn) = connect_one(dc, is_media, target_ip).await {
-            let domain = conn.domain.clone();
-            let mut pools = POOLS.lock().await;
-            let entry = pools.entry(key).or_default();
-            prune_expired(entry);
-            if entry.len() >= pool_size() {
-                return;
-            }
-            log::debug!(
-                "ws pool: filled DC{dc}{} via {domain}",
-                if is_media { "m" } else { "" }
-            );
-            entry.push(conn);
-        }
-    }
-}
-
-/// Take a ready connection from the pool, if any.
-pub async fn acquire(dc: i32, is_media: bool) -> Option<PooledWs> {
-    if is_media {
-        return None;
-    }
-    let key = (dc, is_media);
-    let mut pools = POOLS.lock().await;
-    let entry = pools.get_mut(&key)?;
-    prune_expired(entry);
-    let conn = entry.pop()?;
-    log::debug!(
-        "ws pool: acquired DC{dc}{} via {} ({} left)",
-        if is_media { "m" } else { "" },
-        conn.domain,
-        entry.len()
-    );
-    Some(PooledWs {
-        ws: conn.ws,
-        domain: conn.domain,
+        None
     })
 }
 
-/// Schedule background refill for one (DC, media) slot.
+// Direct WS is served non-media only (media goes straight to the fallback ladder).
+static POOL: Pool = Pool::new(
+    connect,
+    pool_size,
+    pool_ttl,
+    enabled,
+    &[false],
+    REFILL_INTERVAL,
+    "ws pool",
+);
+
+pub struct PooledWs {
+    pub ws: RawWebSocket,
+    pub domain: String,
+}
+
+pub async fn acquire(dc: i32, is_media: bool) -> Option<PooledWs> {
+    POOL.acquire(dc, is_media).await.map(|r| PooledWs {
+        ws: r.ws,
+        domain: r.label,
+    })
+}
+
 pub fn schedule_refill(dc: i32, is_media: bool, target_ip: String) {
-    if is_media {
-        return;
-    }
-    tokio::spawn(async move {
-        refill_one((dc, is_media), &target_ip).await;
-    });
+    POOL.schedule_refill(dc, is_media, target_ip);
 }
 
-async fn refill_one(key: PoolKey, target_ip: &str) {
-    let pools = POOLS.lock().await;
-    let need = pool_size().saturating_sub(pools.get(&key).map(|v| v.len()).unwrap_or(0));
-    drop(pools);
-    if need > 0 {
-        fill_pool(key, target_ip, need).await;
-    }
-}
-
-async fn refill_all() {
-    for dc in 1..=5 {
-        if dc_front_ip(dc).is_empty() {
-            continue;
-        }
-        let target = ws_target_ip(dc, "");
-        if target.is_empty() {
-            continue;
-        }
-        refill_one((dc, false), &target).await;
-    }
-}
-
-/// Background task: periodically top up pools.
 pub fn start_refill_task() {
-    tokio::spawn(async move {
-        let mut tick = interval(REFILL_INTERVAL);
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            refill_all().await;
-        }
-    });
+    POOL.start_refill_task();
 }
 
-/// Pre-warm non-media pools for DCs that have a usable front target.
 pub fn warmup_pools() {
-    log::info!(
-        "ws pool: warming non-media fronted DCs (size={}, ttl={}s)",
-        pool_size(),
-        pool_ttl().as_secs()
-    );
-    tokio::spawn(async move {
-        for dc in 1..=5 {
-            if dc_front_ip(dc).is_empty() {
-                continue;
-            }
-            let target = ws_target_ip(dc, "");
-            if target.is_empty() {
-                continue;
-            }
-            fill_pool((dc, false), &target, pool_size()).await;
-        }
-        let pools = POOLS.lock().await;
-        let total: usize = pools.values().map(|v| v.len()).sum();
-        log::info!("ws pool: warmup done ({total} connection(s) ready)");
-    });
+    POOL.warmup();
 }
 
 #[cfg(test)]

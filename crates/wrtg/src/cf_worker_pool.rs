@@ -1,37 +1,22 @@
-//! Pre-established Cloudflare Worker WebSocket pool per DC.
+//! Pre-established Cloudflare-Worker WebSocket pool per (DC, media).
+//! Thin wiring over [`crate::conn_pool::Pool`].
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::time::Duration;
 
-use tokio::sync::Mutex;
-use tokio::time::{interval, timeout};
+use tokio::time::timeout;
 
 use crate::cf_balancer::worker_domains_for_dc;
+use crate::conn_pool::{ConnectFuture, Pool};
 use crate::mtproto::{dc_default_ip, ws_target_ip};
 use crate::ws::{connect_cf_worker_ws, RawWebSocket};
-
-type PoolKey = (i32, bool);
-
-struct PooledConn {
-    ws: RawWebSocket,
-    created: Instant,
-    worker: String,
-}
-
-static POOLS: LazyLock<Mutex<HashMap<PoolKey, Vec<PooledConn>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const DEFAULT_POOL_SIZE: usize = 2;
 const MAX_POOL_SIZE: usize = 4;
 const DEFAULT_POOL_TTL_SEC: u64 = 120;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const REFILL_INTERVAL: Duration = Duration::from_secs(45);
-
-pub struct PooledCfWs {
-    pub ws: RawWebSocket,
-    pub worker: String,
-}
 
 fn pool_size() -> usize {
     static SIZE: OnceLock<usize> = OnceLock::new();
@@ -55,12 +40,8 @@ fn pool_ttl() -> Duration {
     })
 }
 
-fn is_expired(created: Instant) -> bool {
-    created.elapsed() > pool_ttl()
-}
-
-fn prune_expired(conns: &mut Vec<PooledConn>) {
-    conns.retain(|c| !is_expired(c.created));
+fn enabled() -> bool {
+    !worker_domains_for_dc(0).is_empty()
 }
 
 fn dst_ip(dc: i32, orig_hint: &str) -> String {
@@ -71,130 +52,65 @@ fn dst_ip(dc: i32, orig_hint: &str) -> String {
     dc_default_ip(dc).unwrap_or("149.154.167.220").to_string()
 }
 
-async fn connect_one(dc: i32, worker: &str, dst: &str) -> Option<PooledConn> {
-    match timeout(
-        CONNECT_TIMEOUT,
-        connect_cf_worker_ws(worker, dst, dc, CONNECT_TIMEOUT),
-    )
-    .await
-    {
-        Ok(Ok(ws)) => Some(PooledConn {
-            ws,
-            created: Instant::now(),
-            worker: worker.to_string(),
-        }),
-        Ok(Err(e)) => {
-            log::debug!("cf worker pool: DC{dc} {worker} failed: {e}");
-            None
+fn connect(dc: i32, _is_media: bool, hint: String) -> ConnectFuture {
+    Box::pin(async move {
+        let workers = worker_domains_for_dc(dc);
+        if workers.is_empty() {
+            return None;
         }
-        Err(_) => {
-            log::debug!("cf worker pool: DC{dc} {worker} timeout");
-            None
-        }
-    }
-}
-
-async fn fill_pool(key: PoolKey, dst: &str, count: usize) {
-    let (dc, _) = key;
-    let workers = worker_domains_for_dc(dc);
-    if workers.is_empty() {
-        return;
-    }
-    for slot in 0..count {
-        for offset in 0..workers.len() {
-            let worker = &workers[(slot + offset) % workers.len()];
-            if let Some(conn) = connect_one(dc, worker, dst).await {
-                let mut pools = POOLS.lock().await;
-                let entry = pools.entry(key).or_default();
-                prune_expired(entry);
-                if entry.len() >= pool_size() {
-                    return;
-                }
-                entry.push(conn);
-                break;
+        let dst = dst_ip(dc, &hint);
+        // Rotate the starting worker each attempt so pooled connections spread
+        // across the configured workers instead of all landing on the first.
+        static RR: AtomicUsize = AtomicUsize::new(0);
+        let start = RR.fetch_add(1, Ordering::Relaxed);
+        for i in 0..workers.len() {
+            let worker = &workers[(start + i) % workers.len()];
+            match timeout(
+                CONNECT_TIMEOUT,
+                connect_cf_worker_ws(worker, &dst, dc, CONNECT_TIMEOUT),
+            )
+            .await
+            {
+                Ok(Ok(ws)) => return Some((ws, worker.clone())),
+                Ok(Err(e)) => log::debug!("cf worker pool: DC{dc} {worker} failed: {e}"),
+                Err(_) => log::debug!("cf worker pool: DC{dc} {worker} timeout"),
             }
         }
-    }
+        None
+    })
+}
+
+// CF Worker pool serves both media and non-media DCs.
+static POOL: Pool = Pool::new(
+    connect,
+    pool_size,
+    pool_ttl,
+    enabled,
+    &[false, true],
+    REFILL_INTERVAL,
+    "cf worker pool",
+);
+
+pub struct PooledCfWs {
+    pub ws: RawWebSocket,
+    pub worker: String,
 }
 
 pub async fn acquire(dc: i32, is_media: bool, _orig_hint: &str) -> Option<PooledCfWs> {
-    let key = (dc, is_media);
-    let mut pools = POOLS.lock().await;
-    let entry = pools.get_mut(&key)?;
-    prune_expired(entry);
-    let conn = entry.pop()?;
-    log::debug!(
-        "cf worker pool: acquired DC{dc}{} via {} ({} left)",
-        if is_media { "m" } else { "" },
-        conn.worker,
-        entry.len()
-    );
-    Some(PooledCfWs {
-        ws: conn.ws,
-        worker: conn.worker,
+    POOL.acquire(dc, is_media).await.map(|r| PooledCfWs {
+        ws: r.ws,
+        worker: r.label,
     })
 }
 
 pub fn schedule_refill(dc: i32, is_media: bool, orig_hint: String) {
-    tokio::spawn(async move {
-        let dst = dst_ip(dc, &orig_hint);
-        let key = (dc, is_media);
-        let pools = POOLS.lock().await;
-        let need = pool_size().saturating_sub(pools.get(&key).map(|v| v.len()).unwrap_or(0));
-        drop(pools);
-        if need > 0 {
-            fill_pool(key, &dst, need).await;
-        }
-    });
+    POOL.schedule_refill(dc, is_media, orig_hint);
 }
 
 pub fn start_refill_task() {
-    tokio::spawn(async move {
-        let mut tick = interval(REFILL_INTERVAL);
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            let workers = worker_domains_for_dc(0);
-            if workers.is_empty() {
-                continue;
-            }
-            for dc in 1..=5 {
-                for is_media in [false, true] {
-                    let dst = dst_ip(dc, "");
-                    let key = (dc, is_media);
-                    let pools = POOLS.lock().await;
-                    let need =
-                        pool_size().saturating_sub(pools.get(&key).map(|v| v.len()).unwrap_or(0));
-                    drop(pools);
-                    if need > 0 {
-                        fill_pool(key, &dst, need).await;
-                    }
-                }
-            }
-        }
-    });
+    POOL.start_refill_task();
 }
 
 pub fn warmup_pools() {
-    let workers = worker_domains_for_dc(1);
-    if workers.is_empty() {
-        log::debug!("cf worker pool: skip warmup (no CF_WORKER_DOMAIN)");
-        return;
-    }
-    log::info!(
-        "cf worker pool: warming up DC1-5 (size={}, ttl={}s)",
-        pool_size(),
-        pool_ttl().as_secs()
-    );
-    tokio::spawn(async move {
-        for dc in 1..=5 {
-            for is_media in [false, true] {
-                let dst = dst_ip(dc, "");
-                fill_pool((dc, is_media), &dst, pool_size()).await;
-            }
-        }
-        let pools = POOLS.lock().await;
-        let total: usize = pools.values().map(|v| v.len()).sum();
-        log::info!("cf worker pool: warmup done ({total} connection(s) ready)");
-    });
+    POOL.warmup();
 }
