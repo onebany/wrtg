@@ -11,6 +11,7 @@ pub mod conn_pool;
 pub mod dc_learn;
 pub mod fronting;
 pub mod handshake;
+pub mod https;
 pub mod ip_fail;
 pub mod media;
 pub mod mtproto;

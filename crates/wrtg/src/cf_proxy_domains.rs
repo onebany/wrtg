@@ -3,8 +3,6 @@
 use std::time::Duration;
 
 use rand::Rng;
-use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -261,44 +259,7 @@ async fn connect_pinned(host: &str, connect_timeout: Duration) -> std::io::Resul
 
 async fn https_get(host: &str, path: &str, connect_timeout: Duration) -> std::io::Result<Vec<u8>> {
     let tcp = connect_pinned(host, connect_timeout).await?;
-
-    let connector = crate::tls::connector();
-    let server_name = ServerName::try_from(host.to_string()).map_err(std::io::Error::other)?;
-    let mut stream = timeout(connect_timeout, connector.connect(server_name, tcp)).await??;
-
-    let req = format!(
-        "GET {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
-         User-Agent: wrtg\r\n\
-         Connection: close\r\n\
-         \r\n"
-    );
-    timeout(connect_timeout, stream.write_all(req.as_bytes())).await??;
-
-    let mut buf = Vec::new();
-    let mut limited = stream.take((MAX_HTTP_RESPONSE + 1) as u64);
-    timeout(connect_timeout, limited.read_to_end(&mut buf)).await??;
-    if buf.len() > MAX_HTTP_RESPONSE {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "HTTP response too large",
-        ));
-    }
-
-    let header_end = buf
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no HTTP headers"))?;
-    let body = buf[header_end + 4..].to_vec();
-
-    let status = String::from_utf8_lossy(&buf[..header_end.min(32)]);
-    if !status.contains(" 200 ") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("HTTP error: {}", status.lines().next().unwrap_or("")),
-        ));
-    }
-    Ok(body)
+    crate::https::get_over(tcp, host, path, &[], MAX_HTTP_RESPONSE, connect_timeout).await
 }
 
 #[cfg(test)]
