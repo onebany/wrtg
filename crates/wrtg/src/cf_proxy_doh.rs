@@ -5,8 +5,6 @@ use std::net::IpAddr;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -146,44 +144,15 @@ async fn https_get_json(
     // certificate is still validated against the real resolver name.
     let addr = format!("{connect_ip}:443");
     let tcp = timeout(connect_timeout, TcpStream::connect(&addr)).await??;
-    crate::sockopt::tune_tcp(&tcp);
-
-    let connector = crate::tls::connector();
-    let server_name = ServerName::try_from(host.to_string()).map_err(std::io::Error::other)?;
-    let mut stream = timeout(connect_timeout, connector.connect(server_name, tcp)).await??;
-
-    let req = format!(
-        "GET {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
-         Accept: application/dns-json\r\n\
-         User-Agent: wrtg\r\n\
-         Connection: close\r\n\
-         \r\n"
-    );
-    timeout(connect_timeout, stream.write_all(req.as_bytes())).await??;
-
-    let mut buf = Vec::new();
-    let mut limited = stream.take((MAX_DOH_BODY + 1) as u64);
-    timeout(connect_timeout, limited.read_to_end(&mut buf)).await??;
-    if buf.len() > MAX_DOH_BODY {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "DoH response too large",
-        ));
-    }
-
-    let header_end = buf
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no HTTP headers"))?;
-    let status = String::from_utf8_lossy(&buf[..header_end.min(32)]);
-    if !status.contains(" 200 ") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("DoH HTTP error: {}", status.lines().next().unwrap_or("")),
-        ));
-    }
-    Ok(buf[header_end + 4..].to_vec())
+    crate::https::get_over(
+        tcp,
+        host,
+        path,
+        &[("Accept", "application/dns-json")],
+        MAX_DOH_BODY,
+        connect_timeout,
+    )
+    .await
 }
 
 async fn system_lookup(domain: &str) -> Option<String> {
