@@ -114,10 +114,10 @@ load_config() {
 			return 1
 			;;
 	esac
-	[ "$LISTEN_PORT" -ge 1 ] 2>/dev/null && [ "$LISTEN_PORT" -le 65535 ] || {
+	if ! { [ "$LISTEN_PORT" -ge 1 ] 2>/dev/null && [ "$LISTEN_PORT" -le 65535 ]; }; then
 		echo "wrtg: LISTEN port out of range: $LISTEN_PORT" >&2
 		return 1
-	}
+	fi
 }
 
 default_cidrs() {

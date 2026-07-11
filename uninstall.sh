@@ -19,8 +19,10 @@ if [ "$FORCE" != "1" ]; then
 	esac
 fi
 
-[ -x "$INITD" ] && "$INITD" stop 2>/dev/null || true
-[ -x "$INITD" ] && "$INITD" disable 2>/dev/null || true
+if [ -x "$INITD" ]; then
+	"$INITD" stop 2>/dev/null || true
+	"$INITD" disable 2>/dev/null || true
+fi
 
 nft delete table inet tg_tproxy 2>/dev/null || true
 
