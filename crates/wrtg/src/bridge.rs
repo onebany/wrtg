@@ -363,7 +363,7 @@ pub async fn try_ws_bridge(
 
     let domains = ws_domains(hs.dc, hs.is_media);
     let connect_timeout = ws_connect_timeout(hs.dc, hs.is_media);
-    let (all_blocked, timed_out) = match try_ws_with_domains(
+    let (mut all_blocked, mut timed_out) = match try_ws_with_domains(
         &target_ip,
         &domains,
         relay_init,
@@ -415,12 +415,13 @@ pub async fn try_ws_bridge(
             }
             Err((f_blocked, f_timed_out)) => {
                 mark_fronting_failed(&target_ip, hs.dc);
-                if !f_blocked {
-                    // all_blocked stays as from direct attempt
-                }
-                if f_timed_out {
-                    // timed_out may already be true from direct
-                }
+                // Fold the fronting attempt into the overall signal. The DC is
+                // only "all blocked" (→ 45-min WS blacklist in main.rs) if both
+                // the direct and fronting attempts saw nothing but redirects; a
+                // non-redirect failure on either path is evidence the DC is
+                // still partially reachable. A timeout on either path counts.
+                all_blocked = all_blocked && f_blocked;
+                timed_out = timed_out || f_timed_out;
             }
         }
     }
@@ -546,20 +547,41 @@ pub async fn try_cf_fallback(
         let is_media = hs.is_media;
         let label_owned = label.to_string();
         let relay_init_owned = relay_init.to_vec();
-        let mut handles = Vec::new();
+        let mut set = tokio::task::JoinSet::new();
         for cf_domain in cf_domains.into_iter().skip(1) {
             let label_spawn = label_owned.clone();
             let relay = relay_init_owned.clone();
-            handles.push(tokio::spawn(async move {
+            set.spawn(async move {
                 finish_cf_proxy_connect(&cf_domain, dc, is_media, &relay, &label_spawn).await
-            }));
+            });
         }
-        for h in handles {
-            if let Ok(Some((ws, chosen))) = h.await {
-                update_proxy_domain_for_dc(hs.dc, &chosen);
-                bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
-                return CfBridgeResult::Connected;
+
+        // Real latency race: take the first task that actually connects, in
+        // completion order (not spawn order).
+        let mut winner = None;
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(ok)) = res {
+                winner = Some(ok);
+                break;
             }
+        }
+
+        if winner.is_some() {
+            // Abort the losers and drain the set. A task that connected before
+            // being aborted still yields its WebSocket here, so close it with a
+            // proper close frame instead of leaking a detached half-open session.
+            set.abort_all();
+            while let Some(res) = set.join_next().await {
+                if let Ok(Some((mut ws, _))) = res {
+                    ws.close().await;
+                }
+            }
+        }
+
+        if let Some((ws, chosen)) = winner {
+            update_proxy_domain_for_dc(hs.dc, &chosen);
+            bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
+            return CfBridgeResult::Connected;
         }
     }
 
@@ -936,6 +958,11 @@ pub async fn blind_relay(
         }
         Err(e) => log::warn!("[{label}] passthrough read from {dst}: {e}"),
     }
+    // The downstream (remote -> client) side is done. Tear down the upstream
+    // copy instead of awaiting it: a half-open client that keeps its socket
+    // open but sends nothing would otherwise park this task/connection forever.
+    // Matches the select!+abort teardown the MTProto/TCP bridges use.
+    up.abort();
     let _ = up.await;
 }
 

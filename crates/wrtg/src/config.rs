@@ -17,22 +17,36 @@ pub struct WrtgConfig {
     pub cf_proxy_domains: Vec<String>,
 }
 
+/// Build config from the process environment (startup path).
 pub fn load_from_env() -> WrtgConfig {
-    let mut front_ip = env::var("WRTG_FRONT_IP")
-        .or_else(|_| env::var("FRONT_IP"))
-        .or_else(|_| env::var("TG_TPROXY_FRONT_IP"))
-        .unwrap_or_else(|_| "149.154.167.220".to_string());
+    load_from(&|k| env::var(k).ok())
+}
+
+/// Build config from a parsed `KEY=VALUE` map (SIGHUP reload path). Keeps the
+/// config file as the single source of truth and avoids mutating the process
+/// environment while worker tasks concurrently read it.
+pub fn load_from_map(map: &HashMap<String, String>) -> WrtgConfig {
+    load_from(&|k| map.get(k).cloned())
+}
+
+/// Shared config builder parameterized by a key lookup, so the same parsing and
+/// defaults serve both the env (startup) and the config-file map (reload).
+fn load_from(get: &dyn Fn(&str) -> Option<String>) -> WrtgConfig {
+    let mut front_ip = get("WRTG_FRONT_IP")
+        .or_else(|| get("FRONT_IP"))
+        .or_else(|| get("TG_TPROXY_FRONT_IP"))
+        .unwrap_or_else(|| "149.154.167.220".to_string());
     front_ip = front_ip.trim_matches('\r').trim().to_string();
 
-    let listen_addr = env::var("WRTG_LISTEN")
-        .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
+    let listen_addr = get("WRTG_LISTEN")
+        .unwrap_or_else(|| "0.0.0.0:8443".to_string())
         .trim_matches('\r')
         .to_string();
 
-    let dc_front_ips = parse_dc_front_ips();
-    let front_dcs = load_front_dcs();
-    let cf_worker_domains = load_worker_domains();
-    let cf_proxy_domains = load_proxy_domains();
+    let dc_front_ips = parse_dc_front_ips_with(get);
+    let front_dcs = load_front_dcs_with(get);
+    let cf_worker_domains = load_worker_domains_with(get);
+    let cf_proxy_domains = load_proxy_domains_with(get);
 
     WrtgConfig {
         listen_addr,
@@ -52,9 +66,9 @@ pub fn load_from_env() -> WrtgConfig {
 /// daemon runs on the default — but `wrtg --check` via `set -a && load_config`
 /// exports the empty string. Treating empty as the default keeps both paths in
 /// agreement. Use `none` to actually disable fronting.
-fn load_front_dcs() -> Vec<i32> {
-    match env::var("WRTG_FRONT_DCS") {
-        Ok(v) if !v.trim().trim_matches('\r').trim().is_empty() => parse_front_dcs(&v),
+fn load_front_dcs_with(get: &dyn Fn(&str) -> Option<String>) -> Vec<i32> {
+    match get("WRTG_FRONT_DCS") {
+        Some(v) if !v.trim().trim_matches('\r').trim().is_empty() => parse_front_dcs(&v),
         _ => vec![2, 4],
     }
 }
@@ -77,32 +91,36 @@ pub fn parse_front_dcs(raw: &str) -> Vec<i32> {
     out
 }
 
-fn load_worker_domains() -> Vec<String> {
+fn load_worker_domains_with(get: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let mut domains = Vec::new();
-    if let Ok(v) = env::var("CF_WORKER_DOMAIN") {
+    if let Some(v) = get("CF_WORKER_DOMAIN") {
         domains.extend(parse_domain_list(&v));
     }
-    if let Ok(v) = env::var("WRTG_CF_WORKER_DOMAINS") {
+    if let Some(v) = get("WRTG_CF_WORKER_DOMAINS") {
         domains.extend(parse_domain_list(&v));
     }
     normalize_domain_pool(&domains)
 }
 
-fn load_proxy_domains() -> Vec<String> {
+fn load_proxy_domains_with(get: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let mut domains = Vec::new();
-    if let Ok(v) = env::var("CF_PROXY_DOMAIN") {
+    if let Some(v) = get("CF_PROXY_DOMAIN") {
         domains.extend(parse_domain_list(&v));
     }
-    if let Ok(v) = env::var("WRTG_CF_PROXY_DOMAINS") {
+    if let Some(v) = get("WRTG_CF_PROXY_DOMAINS") {
         domains.extend(parse_domain_list(&v));
     }
     normalize_domain_pool(&domains)
 }
 
 pub fn parse_dc_front_ips() -> HashMap<i32, String> {
+    parse_dc_front_ips_with(&|k| env::var(k).ok())
+}
+
+fn parse_dc_front_ips_with(get: &dyn Fn(&str) -> Option<String>) -> HashMap<i32, String> {
     let mut map = HashMap::new();
 
-    if let Ok(raw) = env::var("WRTG_DC_IPS") {
+    if let Some(raw) = get("WRTG_DC_IPS") {
         for part in raw.split([',', ';']) {
             let part = part.trim();
             if let Some((dc_s, ip)) = part.split_once(':') {
@@ -118,14 +136,14 @@ pub fn parse_dc_front_ips() -> HashMap<i32, String> {
 
     for dc in 1..=5 {
         let key = format!("DC{dc}_FRONT_IP");
-        if let Ok(ip) = env::var(&key) {
+        if let Some(ip) = get(&key) {
             let ip = ip.trim().trim_matches('\r');
             if !ip.is_empty() {
                 map.insert(dc, ip.to_string());
             }
         }
     }
-    if let Ok(ip) = env::var("DC203_FRONT_IP") {
+    if let Some(ip) = get("DC203_FRONT_IP") {
         let ip = ip.trim().trim_matches('\r');
         if !ip.is_empty() {
             map.insert(203, ip.to_string());
@@ -151,22 +169,24 @@ pub fn config_file_path() -> String {
     env::var("WRTG_CONFIG_FILE").unwrap_or_else(|_| DEFAULT_CONFIG_FILE.to_string())
 }
 
-/// Read `KEY=VALUE` lines from the shell config file into the process env, so a
-/// following `load_from_env()` reflects on-disk edits. Used by the SIGHUP reload:
-/// the daemon's env is frozen at launch, but the file is the source of truth.
+/// Parse `KEY=VALUE` lines from the shell config file into a map. Used by the
+/// SIGHUP reload: the config file is the source of truth, and building the new
+/// config from this map (rather than round-tripping through `env::set_var`)
+/// avoids a data race with worker tasks that read the environment concurrently,
+/// and makes the file authoritative — a key deleted from the file reverts to its
+/// default instead of lingering from the previous load.
 /// Approximates shell quoting well enough for the values LuCI / the defaults write.
-pub fn import_config_file(path: &str) -> usize {
+pub fn import_config_file(path: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
     let Ok(text) = std::fs::read_to_string(path) else {
-        return 0;
+        return map;
     };
-    let mut n = 0;
     for line in text.lines() {
         if let Some((key, val)) = parse_kv_line(line) {
-            env::set_var(key, val);
-            n += 1;
+            map.insert(key.to_string(), val.to_string());
         }
     }
-    n
+    map
 }
 
 /// Parse one shell `KEY=VALUE` config line. `None` for blanks/comments/invalid
@@ -198,8 +218,9 @@ fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
 /// without touching the listener. Triggered by SIGHUP (`/etc/init.d/wrtg reload`).
 pub fn reload_from_file() {
     let path = config_file_path();
-    let keys = import_config_file(&path);
-    let cfg = load_from_env();
+    let map = import_config_file(&path);
+    let keys = map.len();
+    let cfg = load_from_map(&map);
     apply_config(&cfg);
     crate::dc_learn::load();
     log::info!(
@@ -246,5 +267,31 @@ mod tests {
         assert_eq!(parse_kv_line(""), None);
         assert_eq!(parse_kv_line("not a config line"), None);
         assert_eq!(parse_kv_line("EMPTY="), Some(("EMPTY", "")));
+    }
+
+    #[test]
+    fn load_from_map_reads_values_and_defaults() {
+        let mut map = HashMap::new();
+        map.insert("FRONT_IP".to_string(), "10.0.0.1".to_string());
+        map.insert("WRTG_FRONT_DCS".to_string(), "1,3".to_string());
+        map.insert("WRTG_DC_IPS".to_string(), "2:5.5.5.5".to_string());
+
+        let cfg = load_from_map(&map);
+        assert_eq!(cfg.front_ip, "10.0.0.1");
+        assert_eq!(cfg.front_dcs, vec![1, 3]);
+        assert_eq!(cfg.dc_front_ips.get(&2).map(String::as_str), Some("5.5.5.5"));
+        // Absent listen key falls back to the built-in default.
+        assert_eq!(cfg.listen_addr, "0.0.0.0:8443");
+    }
+
+    #[test]
+    fn load_from_map_is_authoritative_dropped_key_reverts_to_default() {
+        // The reload path builds config purely from the file map, so a key that
+        // is no longer present reverts to its default rather than lingering.
+        let empty = HashMap::new();
+        let cfg = load_from_map(&empty);
+        assert_eq!(cfg.front_ip, "149.154.167.220");
+        assert_eq!(cfg.front_dcs, vec![2, 4]);
+        assert!(cfg.dc_front_ips.is_empty());
     }
 }

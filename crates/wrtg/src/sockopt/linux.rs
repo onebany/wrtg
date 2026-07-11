@@ -73,6 +73,18 @@ pub fn get_original_dst(stream: &TcpStream) -> io::Result<(String, u16)> {
         return Err(io::Error::last_os_error());
     }
 
+    // `addr` is a `sockaddr_in`; parsing it only makes sense for AF_INET. An
+    // IPv6 original destination comes back as a `sockaddr_in6` (via
+    // IP6T_SO_ORIGINAL_DST at IPPROTO_IPV6), which we don't support here —
+    // reading it as IPv4 would yield a garbage address/port. Treat anything
+    // that isn't AF_INET as an unknown destination.
+    if addr.sin_family != libc::AF_INET as u16 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "SO_ORIGINAL_DST returned a non-IPv4 address",
+        ));
+    }
+
     let port = u16::from_be(addr.sin_port);
     let ip = format!(
         "{}.{}.{}.{}",
