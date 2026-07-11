@@ -1,11 +1,11 @@
 //! Per-DC WS blacklist with TTL (HTTP 302 avoidance).
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::Duration;
 
-static BLACKLIST: LazyLock<Mutex<HashMap<(i32, bool), Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+use crate::ttl_map::TtlMap;
+
+static BLACKLIST: TtlMap<(i32, bool)> = TtlMap::new();
 
 const DEFAULT_BLACKLIST_TTL_SEC: u64 = 45 * 60;
 
@@ -29,31 +29,19 @@ fn blacklist_ttl() -> Duration {
 }
 
 pub fn ws_blacklisted(dc: i32, is_media: bool) -> bool {
-    let mut map = BLACKLIST.lock().unwrap();
-    let key = (dc, is_media);
-    let Some(expiry) = map.get(&key) else {
-        return false;
-    };
-    if Instant::now() < *expiry {
-        return true;
-    }
-    map.remove(&key);
-    let media_tag = if is_media { "m" } else { "" };
-    log::info!("DC{dc}{media_tag} WS blacklist expired, retry allowed");
-    false
+    BLACKLIST.is_active(&(dc, is_media))
 }
 
 pub fn mark_ws_blacklisted(dc: i32, is_media: bool) {
-    let expiry = Instant::now() + blacklist_ttl();
     let ttl_secs = blacklist_ttl().as_secs();
-    BLACKLIST.lock().unwrap().insert((dc, is_media), expiry);
+    BLACKLIST.mark((dc, is_media), blacklist_ttl());
     let media_tag = if is_media { " media" } else { "" };
     log::info!("DC{dc}{media_tag} WS blacklisted for {ttl_secs}s (HTTP 302 on all domains)");
 }
 
 #[cfg(test)]
 fn reset_blacklist_for_test() {
-    BLACKLIST.lock().unwrap().clear();
+    BLACKLIST.clear_all();
 }
 
 #[cfg(test)]
@@ -86,6 +74,6 @@ mod tests {
         assert!(ws_blacklisted(99, false));
         thread::sleep(StdDuration::from_millis(1100));
         assert!(!ws_blacklisted(99, false));
-        assert!(!BLACKLIST.lock().unwrap().contains_key(&(99, false)));
+        assert!(!BLACKLIST.contains(&(99, false)));
     }
 }

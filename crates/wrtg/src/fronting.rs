@@ -1,13 +1,13 @@
 //! Opt-in TLS fronting fallback: TCP to target IP, Host `kws{N}.web.telegram.org`,
 //! SNI from `WRTG_FRONTING_SNI`. Cooldown after failure via `WRTG_FRONTING_COOLDOWN_SEC`.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use tokio::time::timeout;
 
 use crate::mtproto::ws_domains;
+use crate::ttl_map::TtlMap;
 use crate::ws::{connect_ws_fronted, is_ws_redirect_err, RawWebSocket};
 
 const DEFAULT_COOLDOWN_SEC: u64 = 1800;
@@ -38,18 +38,13 @@ pub fn fronting_enabled() -> bool {
     fronting_sni().is_some()
 }
 
-static FRONTING_FAIL: LazyLock<Mutex<HashMap<(String, i32), Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static FRONTING_FAIL: TtlMap<(String, i32)> = TtlMap::new();
 
 pub fn mark_fronting_failed(ip: &str, dc: i32) {
     if ip.is_empty() {
         return;
     }
-    let expiry = Instant::now() + cooldown();
-    FRONTING_FAIL
-        .lock()
-        .unwrap()
-        .insert((ip.to_string(), dc), expiry);
+    FRONTING_FAIL.mark((ip.to_string(), dc), cooldown());
     log::info!(
         "Fronting {ip} DC{dc} marked failed for {}s",
         cooldown().as_secs()
@@ -60,12 +55,7 @@ pub fn clear_fronting_fail(ip: &str, dc: i32) {
     if ip.is_empty() {
         return;
     }
-    if FRONTING_FAIL
-        .lock()
-        .unwrap()
-        .remove(&(ip.to_string(), dc))
-        .is_some()
-    {
+    if FRONTING_FAIL.clear(&(ip.to_string(), dc)) {
         log::debug!("Fronting {ip} DC{dc} fail cooldown cleared");
     }
 }
@@ -74,17 +64,7 @@ pub fn should_skip_fronting(ip: &str, dc: i32) -> bool {
     if ip.is_empty() || !fronting_enabled() {
         return true;
     }
-    let mut map = FRONTING_FAIL.lock().unwrap();
-    let key = (ip.to_string(), dc);
-    let Some(expiry) = map.get(&key) else {
-        return false;
-    };
-    if Instant::now() < *expiry {
-        return true;
-    }
-    map.remove(&key);
-    log::info!("Fronting {ip} DC{dc} fail cooldown expired");
-    false
+    FRONTING_FAIL.is_active(&(ip.to_string(), dc))
 }
 
 pub async fn try_ws_fronting(
@@ -145,7 +125,7 @@ pub async fn try_ws_fronting(
 }
 
 pub fn reset_all() {
-    FRONTING_FAIL.lock().unwrap().clear();
+    FRONTING_FAIL.clear_all();
 }
 
 #[cfg(test)]
@@ -167,10 +147,7 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap();
         reset_all();
         mark_fronting_failed("8.8.8.8", 4);
-        FRONTING_FAIL.lock().unwrap().insert(
-            ("8.8.8.8".to_string(), 4),
-            Instant::now() + Duration::from_secs(60),
-        );
+        FRONTING_FAIL.mark(("8.8.8.8".to_string(), 4), Duration::from_secs(60));
         assert!(should_skip_fronting("8.8.8.8", 4));
         clear_fronting_fail("8.8.8.8", 4);
         if fronting_enabled() {
