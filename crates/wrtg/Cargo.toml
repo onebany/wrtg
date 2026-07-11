@@ -1,6 +1,6 @@
 [package]
 name = "wrtg"
-version = "0.5.16"
+version = "0.5.17"
 edition = "2021"
 description = "Telegram MTProto transparent proxy (Rust port of tg-tproxy)"
 license = "MIT"
