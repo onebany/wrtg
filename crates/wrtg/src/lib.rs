@@ -7,6 +7,7 @@ pub mod cf_proxy_domains;
 pub mod cf_worker_pool;
 pub mod check;
 pub mod config;
+pub mod conn_pool;
 pub mod dc_learn;
 pub mod fronting;
 pub mod handshake;
