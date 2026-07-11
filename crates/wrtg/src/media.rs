@@ -54,6 +54,36 @@ pub fn rewrite_http_front_host(data: &[u8], orig_ip: &str, orig_port: u16) -> Ve
     replace_http_host(data, &host).unwrap_or_else(|| data.to_vec())
 }
 
+/// Payload for local `FRONT_IP:80` passthrough. Regular DC MTProto-over-HTTP
+/// keeps the client's `Host: <dc-ip>:80` — the front routes on that header.
+/// Rewriting to `kws{N}.web.telegram.org` makes the front answer HTTP 302
+/// (Location to core.telegram.org) and the emoji picker stays empty. Only
+/// blocked media CDN IPs need `kws{N}-1` Host rewrite.
+pub fn http_front_passthrough_payload(data: &[u8], orig_ip: &str, orig_port: u16) -> Vec<u8> {
+    if orig_port != 80 || !needs_http_host_rewrite(orig_ip) {
+        return data.to_vec();
+    }
+    rewrite_http_front_host(data, orig_ip, orig_port)
+}
+
+pub fn needs_http_host_rewrite(orig_ip: &str) -> bool {
+    if is_blocked_media_cdn(orig_ip) {
+        return true;
+    }
+    dc_from_orig_dst(orig_ip).is_some_and(|(_, is_media)| is_media)
+}
+
+/// Whether blind-relay should try CF Worker passthrough for this flow.
+///
+/// All MTProto-over-HTTP (`:80`) must use local `FRONT_IP` — the front routes on
+/// `Host: <dc-ip>:80` for regular DCs and on `Host: kws{N}-1.web.telegram.org` for
+/// media CDN. Tunnelling HTTP through the Worker to the real DC IP returns HTTP
+/// 404; the session closes before front fallback runs (same failure as regular
+/// DC before 0.5.14). Worker passthrough remains for TLS (:443) to blocked CDN IPs.
+pub fn should_try_worker_passthrough(orig_port: u16) -> bool {
+    orig_port != 80
+}
+
 fn replace_http_host(data: &[u8], new_host: &str) -> Option<Vec<u8>> {
     let lower: Vec<u8> = data.iter().map(|b| b.to_ascii_lowercase()).collect();
     let line_start = if let Some(i) = lower.windows(7).position(|w| w == b"\r\nhost:") {
@@ -111,6 +141,27 @@ mod tests {
     }
 
     #[test]
+    fn http_front_passthrough_keeps_dc_host_for_regular_dc() {
+        set_front_ip("149.154.167.220".into());
+        let req = b"POST /api HTTP/1.1\r\nHost: 149.154.167.51:80\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nbody";
+        let out = http_front_passthrough_payload(req, "149.154.167.51", 80);
+        // Payload is passed through untouched: the wire keeps `Host: <dc-ip>:80`.
+        // parse_http_host intentionally rejects DC-IP hosts (front routing), so it
+        // returns None here — the bytes, not that helper, carry the host.
+        assert_eq!(out, req);
+        assert_eq!(parse_http_host(&out), None);
+    }
+
+    #[test]
+    fn http_front_passthrough_rewrites_media_cdn() {
+        let req = b"POST /api HTTP/1.1\r\nHost: 91.108.56.155:80\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nbody";
+        let out = http_front_passthrough_payload(req, "91.108.56.155", 80);
+        assert_ne!(out, req);
+        let host = parse_http_host(&out);
+        assert_eq!(host.as_deref(), Some("kws5-1.web.telegram.org"));
+    }
+
+    #[test]
     fn rewrite_http_front_host_alt_dc() {
         let req = b"POST /api HTTP/1.1\r\nHost: 149.154.175.53:80\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nbody";
         let out = rewrite_http_front_host(req, "149.154.175.53", 80);
@@ -126,6 +177,19 @@ mod tests {
         assert!(!targets.is_empty());
         assert_eq!(targets[0], "149.154.167.220");
         assert!(!targets.iter().any(|ip| ip == "149.154.175.211"));
+    }
+
+    #[test]
+    fn should_try_worker_passthrough_skips_http() {
+        // MTProto-over-HTTP (:80) always goes to the local FRONT_IP.
+        assert!(!should_try_worker_passthrough(80));
+    }
+
+    #[test]
+    fn should_try_worker_passthrough_allows_tls() {
+        // TLS (:443) may tunnel to blocked CDN IPs through the Worker.
+        assert!(should_try_worker_passthrough(443));
+        assert!(should_try_worker_passthrough(5222));
     }
 
     #[test]

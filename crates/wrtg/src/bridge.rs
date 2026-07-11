@@ -19,10 +19,11 @@ use crate::ip_fail::{
     clear_dc_fail, clear_ip_fail, mark_dc_failed, mark_ip_failed, should_skip_direct_ws,
     ws_connect_timeout,
 };
-use crate::media::{http_front_host, rewrite_http_front_host};
+use crate::media::{
+    http_front_host, http_front_passthrough_payload, should_try_worker_passthrough,
+};
 use crate::mtproto::{
-    dc_default_ip, tcp_fallback_targets, ws_domains, ws_target_ip, CryptoCtx,
-    HandshakeInfo,
+    dc_default_ip, tcp_fallback_targets, ws_domains, ws_target_ip, CryptoCtx, HandshakeInfo,
 };
 use crate::sockopt::{tune_tcp, RELAY_BUF_SIZE};
 use crate::splitter::MsgSplitter;
@@ -674,7 +675,29 @@ async fn relay_via_worker(
             return Err(client);
         }
     }
-    log::info!("[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}");
+    let http_host = if port == 80 {
+        crate::tls_sni::parse_http_host(initial)
+            .or_else(|| {
+                let lower = String::from_utf8_lossy(initial).to_lowercase();
+                let i = lower.find("\r\nhost:")?;
+                let rest = &initial[i + 7..];
+                let end = rest.iter().position(|&b| b == b'\r' || b == b'\n')?;
+                let h = String::from_utf8_lossy(&rest[..end]).trim().to_string();
+                if h.is_empty() {
+                    None
+                } else {
+                    Some(h)
+                }
+            })
+            .map(|h| format!(" host={h}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    log::info!(
+        "[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}{http_host} ({} bytes)",
+        initial.len()
+    );
 
     let (mut ws_read, mut ws_write) = ws.into_halves();
     let (mut cr, mut cw) = client.into_split();
@@ -762,7 +785,9 @@ async fn try_worker_passthrough(
         return Err(client);
     }
     let port = if orig_port == 0 { 443 } else { orig_port };
-    let dst_ip = worker_passthrough_dst(orig_ip, orig_port);
+    // Tunnel straight to the client's real DC IP from the CF edge; the ISP
+    // blocks it locally but the Worker reaches Telegram subnets.
+    let dst_ip = orig_ip;
     log::info!(
         "[{label}] worker passthrough trying {} worker(s) -> {dst_ip}:{port}",
         workers.len()
@@ -770,12 +795,12 @@ async fn try_worker_passthrough(
     for worker in &workers {
         match timeout(
             CF_CONNECT_TIMEOUT,
-            connect_cf_worker_tcp(worker, &dst_ip, port, CF_CONNECT_TIMEOUT),
+            connect_cf_worker_tcp(worker, dst_ip, port, CF_CONNECT_TIMEOUT),
         )
         .await
         {
             Ok(Ok(ws)) => {
-                match relay_via_worker(client, ws, initial, label, worker, &dst_ip, port).await {
+                match relay_via_worker(client, ws, initial, label, worker, dst_ip, port).await {
                     Ok(()) => return Ok(()),
                     Err(returned_client) => {
                         client = returned_client;
@@ -805,19 +830,23 @@ pub async fn blind_relay(
     initial: &[u8],
     label: &str,
 ) {
-    // MTProto-over-HTTP uses `Host: <dc-ip>:80`; Telegram expects kws{N}(.web.telegram.org).
-    // Apply before worker passthrough too — relaying raw Host to the real DC fails silently.
-    let payload = if orig_port == 80 {
-        rewrite_http_front_host(initial, orig_ip, orig_port)
+    let http_payload = if orig_port == 80 {
+        http_front_passthrough_payload(initial, orig_ip, orig_port)
     } else {
         initial.to_vec()
     };
 
-    // Prefer tunneling to the real DC through the Worker (reaches blocked media
-    // DCs that the front rejects with 302). Falls back to front passthrough.
-    let client = match try_worker_passthrough(client, orig_ip, orig_port, &payload, label).await {
-        Ok(()) => return,
-        Err(c) => c,
+    // Worker passthrough: TLS and media CDN HTTP (needs kws{N}-1 Host rewrite).
+    // Regular DC MTProto-over-HTTP must use local FRONT_IP below — the Worker
+    // path to real DC :80 returns HTTP 404 and the session ends before fallback.
+    let client = if should_try_worker_passthrough(orig_port) {
+        match try_worker_passthrough(client, orig_ip, orig_port, &http_payload, label).await {
+            Ok(()) => return,
+            Err(c) => c,
+        }
+    } else {
+        log::info!("[{label}] HTTP :80 -> front passthrough (skip worker)");
+        client
     };
 
     let ports = passthrough_ports(orig_port);
@@ -825,6 +854,18 @@ pub async fn blind_relay(
     if host.is_empty() && orig_port == 80 {
         host = http_front_host(orig_ip, orig_port);
     }
+    let front_payload = if orig_port == 80 {
+        http_payload
+    } else {
+        initial.to_vec()
+    };
+    let wire_host = http_wire_host(&front_payload).or_else(|| {
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.clone())
+        }
+    });
     let targets = passthrough_targets(orig_ip, &host, orig_port);
 
     let mut tried = Vec::new();
@@ -848,24 +889,31 @@ pub async fn blind_relay(
         return;
     };
 
-    if !host.is_empty() && host != orig_ip {
-        log::info!(
-            "[{label}] passthrough -> {dst} host={host} ({} bytes initial)",
-            payload.len()
-        );
-    } else if payload.len() != initial.len() {
-        log::info!(
-            "[{label}] passthrough -> {dst} media-http ({} bytes initial)",
-            payload.len()
-        );
+    if let Some(h) = wire_host.as_deref() {
+        if h != orig_ip {
+            log::info!(
+                "[{label}] passthrough -> {dst} host={h} ({} bytes initial)",
+                front_payload.len()
+            );
+        } else if front_payload.len() != initial.len() {
+            log::info!(
+                "[{label}] passthrough -> {dst} media-http ({} bytes initial)",
+                front_payload.len()
+            );
+        } else {
+            log::info!(
+                "[{label}] passthrough -> {dst} ({} bytes initial)",
+                front_payload.len()
+            );
+        }
     } else {
         log::info!(
             "[{label}] passthrough -> {dst} ({} bytes initial)",
-            payload.len()
+            front_payload.len()
         );
     }
 
-    if !payload.is_empty() && remote.write_all(&payload).await.is_err() {
+    if !front_payload.is_empty() && remote.write_all(&front_payload).await.is_err() {
         return;
     }
 
@@ -875,25 +923,63 @@ pub async fn blind_relay(
         let _ = tokio::io::copy(&mut cr, &mut rw).await;
         let _ = rw.shutdown().await;
     });
-    let _ = tokio::io::copy(&mut rr, &mut cw).await;
+    let mut peek = vec![0u8; 512];
+    match rr.read(&mut peek).await {
+        Ok(0) => {}
+        Ok(n) => {
+            log_http_response(label, &dst, &peek[..n]);
+            if cw.write_all(&peek[..n]).await.is_err() {
+                up.abort();
+                return;
+            }
+            let _ = tokio::io::copy(&mut rr, &mut cw).await;
+        }
+        Err(e) => log::warn!("[{label}] passthrough read from {dst}: {e}"),
+    }
     let _ = up.await;
 }
 
-#[cfg(test)]
-mod worker_passthrough_tests {
-    use super::worker_passthrough_dst;
+/// HTTP Host as sent on the wire (includes `dc-ip:80`; unlike `parse_http_host`).
+fn http_wire_host(data: &[u8]) -> Option<String> {
+    let lower = String::from_utf8_lossy(data).to_lowercase();
+    let i = lower.find("\r\nhost:")?;
+    let rest = &data[i + 7..];
+    let mut j = 0usize;
+    while j < rest.len() && (rest[j] == b' ' || rest[j] == b'\t') {
+        j += 1;
+    }
+    let start = j;
+    while j < rest.len() && rest[j] != b'\r' && rest[j] != b'\n' {
+        j += 1;
+    }
+    if j == start {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&rest[start..j]).trim().to_string())
+}
 
-    #[test]
-    fn worker_passthrough_dst_uses_real_dc_ip() {
-        assert_eq!(
-            worker_passthrough_dst("149.154.175.211", 80),
-            "149.154.175.211"
+fn log_http_response(label: &str, dst: &str, chunk: &[u8]) {
+    let Ok(head) = std::str::from_utf8(chunk) else {
+        log::info!(
+            "[{label}] passthrough <- {dst} ({} bytes, non-utf8)",
+            chunk.len()
         );
-        assert_eq!(worker_passthrough_dst("91.108.56.155", 80), "91.108.56.155");
-        assert_eq!(
-            worker_passthrough_dst("149.154.167.41", 80),
-            "149.154.167.41"
-        );
+        return;
+    };
+    let status = head.lines().next().unwrap_or("<empty>");
+    let location = head
+        .lines()
+        .find_map(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower
+                .strip_prefix("location:")
+                .map(|v| v.trim().to_string())
+        })
+        .unwrap_or_default();
+    if location.is_empty() {
+        log::info!("[{label}] passthrough <- {dst} {status}");
+    } else {
+        log::info!("[{label}] passthrough <- {dst} {status} Location={location}");
     }
 }
 
@@ -903,15 +989,6 @@ fn fmt_dc(dc: i32, is_media: bool) -> String {
     } else {
         format!("DC{dc}")
     }
-}
-
-/// Worker passthrough always tunnels to the client's original DC IP. The CF
-/// Worker reaches Telegram subnets from the edge; the ISP often blocks them
-/// locally. `FRONT_IP:80` answers `kws{N}` Host headers with HTTP 302, which
-/// breaks MTProto-over-HTTP (empty emoji/sticker grids). Host rewrite to
-/// `kws{N}` is applied separately in `blind_relay` before the tunnel opens.
-fn worker_passthrough_dst(orig_ip: &str, _orig_port: u16) -> String {
-    orig_ip.to_string()
 }
 
 fn passthrough_ports(orig_port: u16) -> Vec<u16> {

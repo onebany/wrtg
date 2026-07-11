@@ -82,8 +82,24 @@ stop_service() {
 }
 
 reload_service() {
-	echo "wrtg: config changes require a process restart"
-	/etc/init.d/wrtg restart
+	# Live-reload front/domains/DC-learn via SIGHUP — no dropped sessions.
+	# LISTEN / nftables changes still need `restart` (listener already bound).
+	# busybox pgrep matches the cmdline, so filter by comm to skip shells that
+	# merely mention the binary path (log monitors, this very script, etc.).
+	local name pid daemon=""
+	name="$(basename "$BIN")"
+	for pid in $(pgrep -f "$BIN" 2>/dev/null); do
+		if [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "$name" ]; then
+			daemon="$pid"
+			break
+		fi
+	done
+	if [ -n "$daemon" ] && kill -HUP "$daemon" 2>/dev/null; then
+		echo "wrtg: reloaded config via SIGHUP (pid $daemon)"
+	else
+		echo "wrtg: not running — starting"
+		/etc/init.d/wrtg restart
+	fi
 }
 
 service_triggers() {
