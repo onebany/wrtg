@@ -102,7 +102,7 @@ jobs:
           # Self-contained bundle: prebuilt binaries + service files + LuCI + docs
           # + install.sh, so the router can install with no git/Rust (SKIP_BUILD=1).
           mkdir -p bundle/wrtg/dist
-          cp -r install.sh bootstrap.sh build-rust.sh VERSION openwrt docs bundle/wrtg/
+          cp -r install.sh bootstrap.sh build-rust.sh VERSION README.md openwrt bundle/wrtg/
           cp dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm bundle/wrtg/dist/
           tar -czf dist/wrtg-openwrt.tar.gz -C bundle wrtg
 
