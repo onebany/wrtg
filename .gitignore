@@ -17,6 +17,12 @@ Desktop.ini
 # IDE
 .vscode/
 .idea/
-.cursor/AI_CONTEXT.md
 *.swp
 *.swo
+
+# AI assistant context / rules (not part of the project)
+.cursor/
+CLAUDE.md
+AGENTS.md
+.aider*
+.claude/
