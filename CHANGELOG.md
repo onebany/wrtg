@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.17 — 2026-07-12
 
 ### Internal / refactor
 - **Deduplicated the code** with no behaviour change: a shared `recrypt()` for the
@@ -77,6 +77,10 @@
   finished, the client→remote copy task was awaited unconditionally, so a client
   holding its socket open idle kept the task/connection alive forever. It is now
   torn down like the MTProto/TCP bridges (abort + reap).
+- **`wrtg --check` ignored the config file** — run by hand it lacks the procd
+  environment the daemon starts with, so it reported a configured CF Worker/proxy
+  as "none configured". `--check` now seeds its environment from
+  `/etc/wrtg/config` first (real env still wins).
 
 ## 0.5.16 — 2026-07-10
 

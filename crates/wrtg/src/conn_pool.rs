@@ -137,7 +137,11 @@ impl Pool {
                 ws.close().await;
                 return;
             }
-            log::debug!("{}: filled DC{dc}{} via {label}", self.name, media_tag(is_media));
+            log::debug!(
+                "{}: filled DC{dc}{} via {label}",
+                self.name,
+                media_tag(is_media)
+            );
             entry.push(Pooled {
                 ws,
                 created: Instant::now(),

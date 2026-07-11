@@ -491,7 +491,10 @@ pub async fn try_cf_fallback(
         if let Some(ws) =
             send_relay_init(pooled.ws, relay_init, label, hs.dc, "CF worker pool").await
         {
-            log::info!("[{label}] DC{} -> WS connected via CF worker pool ({worker})", hs.dc);
+            log::info!(
+                "[{label}] DC{} -> WS connected via CF worker pool ({worker})",
+                hs.dc
+            );
             bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
             schedule_cf_refill(hs.dc, hs.is_media, orig_ip.to_string());
             return CfBridgeResult::Connected;
@@ -508,8 +511,7 @@ pub async fn try_cf_fallback(
         .await
         {
             Ok(Ok(ws)) => {
-                let Some(ws) =
-                    send_relay_init(ws, relay_init, label, hs.dc, "CF worker").await
+                let Some(ws) = send_relay_init(ws, relay_init, label, hs.dc, "CF worker").await
                 else {
                     continue;
                 };
