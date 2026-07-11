@@ -109,6 +109,9 @@ FRONT_IP="149.154.167.220"
 # WRTG_WS_PING_SEC="30"          # idle WS ping interval (seconds)
 # WRTG_TCP_KEEPALIVE_SEC="30"    # TCP keepalive period (seconds)
 
+# Max simultaneously-served connections (backpressure cap; 0/unset -> 1024)
+# WRTG_MAX_CONNS="1024"
+
 # Alternative front IP env names (CLI --front-ip takes precedence over all):
 # WRTG_FRONT_IP="149.154.167.220"
 # TG_TPROXY_FRONT_IP="149.154.167.220"

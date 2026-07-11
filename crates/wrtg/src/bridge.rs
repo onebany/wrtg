@@ -29,8 +29,8 @@ use crate::sockopt::{tune_tcp, RELAY_BUF_SIZE};
 use crate::splitter::MsgSplitter;
 use crate::tls_sni::{passthrough_host, passthrough_targets};
 use crate::ws::{
-    connect_cf_worker_tcp, connect_cf_worker_ws, connect_ws, is_ws_redirect, ws_ping_frame,
-    RawWebSocket,
+    connect_cf_worker_tcp, connect_cf_worker_ws, connect_ws_with_headers, is_ws_redirect_err,
+    ws_ping_frame, RawWebSocket,
 };
 use crate::ws_blacklist::ws_blacklisted;
 use crate::ws_pool::{acquire, schedule_refill};
@@ -283,7 +283,7 @@ async fn try_ws_with_domains(
         log::info!("[{label}] DC{dc} -> trying WSS {domain} via {target_ip}");
         match timeout(
             connect_timeout,
-            connect_ws(target_ip, domain, "/apiws", connect_timeout),
+            connect_ws_with_headers(target_ip, domain, "/apiws", connect_timeout, &[]),
         )
         .await
         {
@@ -294,11 +294,15 @@ async fn try_ws_with_domains(
                 continue;
             }
             Ok(Err(e)) => {
-                log::warn!("[{label}] DC{dc} WS {domain} failed: {e}");
-                if !is_ws_redirect(&e) {
+                // Check the typed handshake status before collapsing to io::Error,
+                // so a redirect is detected by status code, not a substring match.
+                let redirect = is_ws_redirect_err(&e);
+                let io_err = e.into_io();
+                log::warn!("[{label}] DC{dc} WS {domain} failed: {io_err}");
+                if !redirect {
                     all_blocked = false;
                 }
-                if e.kind() == std::io::ErrorKind::TimedOut {
+                if io_err.kind() == std::io::ErrorKind::TimedOut {
                     timed_out = true;
                 }
                 continue;
