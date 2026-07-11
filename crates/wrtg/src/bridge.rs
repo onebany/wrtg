@@ -703,18 +703,7 @@ async fn relay_via_worker(
     }
     let http_host = if port == 80 {
         crate::tls_sni::parse_http_host(initial)
-            .or_else(|| {
-                let lower = String::from_utf8_lossy(initial).to_lowercase();
-                let i = lower.find("\r\nhost:")?;
-                let rest = &initial[i + 7..];
-                let end = rest.iter().position(|&b| b == b'\r' || b == b'\n')?;
-                let h = String::from_utf8_lossy(&rest[..end]).trim().to_string();
-                if h.is_empty() {
-                    None
-                } else {
-                    Some(h)
-                }
-            })
+            .or_else(|| crate::tls_sni::http_host_raw(initial))
             .map(|h| format!(" host={h}"))
             .unwrap_or_default()
     } else {
@@ -885,7 +874,7 @@ pub async fn blind_relay(
     } else {
         initial.to_vec()
     };
-    let wire_host = http_wire_host(&front_payload).or_else(|| {
+    let wire_host = crate::tls_sni::http_host_raw(&front_payload).or_else(|| {
         if host.is_empty() {
             None
         } else {
@@ -968,25 +957,6 @@ pub async fn blind_relay(
     // Matches the select!+abort teardown the MTProto/TCP bridges use.
     up.abort();
     let _ = up.await;
-}
-
-/// HTTP Host as sent on the wire (includes `dc-ip:80`; unlike `parse_http_host`).
-fn http_wire_host(data: &[u8]) -> Option<String> {
-    let lower = String::from_utf8_lossy(data).to_lowercase();
-    let i = lower.find("\r\nhost:")?;
-    let rest = &data[i + 7..];
-    let mut j = 0usize;
-    while j < rest.len() && (rest[j] == b' ' || rest[j] == b'\t') {
-        j += 1;
-    }
-    let start = j;
-    while j < rest.len() && rest[j] != b'\r' && rest[j] != b'\n' {
-        j += 1;
-    }
-    if j == start {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&rest[start..j]).trim().to_string())
 }
 
 fn log_http_response(label: &str, dst: &str, chunk: &[u8]) {

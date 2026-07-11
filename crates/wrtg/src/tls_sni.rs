@@ -153,7 +153,9 @@ fn parse_sni_extension(data: &[u8]) -> Option<String> {
     None
 }
 
-pub fn parse_http_host(data: &[u8]) -> Option<String> {
+/// Raw `Host:` header value exactly as sent on the wire, including any `:port`
+/// and IP-literal hosts. The single HTTP-Host scanner shared by the extractors.
+pub fn http_host_raw(data: &[u8]) -> Option<String> {
     const MAX: usize = 4096;
     let data = if data.len() > MAX { &data[..MAX] } else { data };
     let lower = String::from_utf8_lossy(data).to_lowercase();
@@ -170,7 +172,18 @@ pub fn parse_http_host(data: &[u8]) -> Option<String> {
     if j == start {
         return None;
     }
-    let mut host = String::from_utf8_lossy(&rest[start..j]).trim().to_string();
+    let host = String::from_utf8_lossy(&rest[start..j]).trim().to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// Host suitable for SNI / passthrough routing: `:port` stripped, IP-literal
+/// hosts rejected (they can't front to a named DC endpoint).
+pub fn parse_http_host(data: &[u8]) -> Option<String> {
+    let mut host = http_host_raw(data)?;
     // Match Go net.SplitHostPort: strip :port before domain/IP checks.
     if let Some((h, port)) = host.rsplit_once(':') {
         if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
