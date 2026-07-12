@@ -13,7 +13,7 @@ jobs:
     name: cargo test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,7 +58,7 @@ jobs:
             out: wrtg-linux-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check VERSION matches tag
         run: |
@@ -93,7 +93,7 @@ jobs:
           chmod +x "dist/${{ matrix.out }}"
           file "dist/${{ matrix.out }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.out }}
           path: dist/${{ matrix.out }}
@@ -109,9 +109,9 @@ jobs:
       # is unset the Gitea step is skipped and only the GitHub release is created.
       GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -130,7 +130,7 @@ jobs:
           cd dist
           sha256sum wrtg-linux-* wrtg-openwrt.tar.gz > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
