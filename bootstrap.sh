@@ -4,19 +4,20 @@
 # Downloads a release bundle (preferred) or assembles from release binary +
 # source archive, then runs install.sh. No git, no Rust, no build required.
 #
-#   wget -qO- https://github.com/onebany/wrtg/raw/branch/main/bootstrap.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 #
 # Options (env):
 #   VER=v0.5.5        Install a specific release instead of the latest
-#   WRTG_BASE_URL=    Override release host (alias: WRTG_RELEASE_URL)
-#   WRTG_REPO=o/r     Use GitHub releases instead (e.g. onebany/wrtg)
+#   WRTG_REPO=o/r     GitHub repo to install from (default: onebany/wrtg)
+#   WRTG_BASE_URL=    Install from a self-hosted Gitea host instead of GitHub
+#                     (Gitea-style API; alias: WRTG_RELEASE_URL)
 #   ASSUME_YES=1      Non-interactive (accept config defaults)
 #   plus any install.sh option: SKIP_LUCI=1, FRONT_IP=, CF_WORKER_DOMAIN=, ...
 
 set -e
 
-DEFAULT_BASE="https://github.com/onebany/wrtg"
-BASE="${WRTG_BASE_URL:-${WRTG_RELEASE_URL:-$DEFAULT_BASE}}"
+BASE="${WRTG_BASE_URL:-${WRTG_RELEASE_URL:-}}"
+WRTG_REPO="${WRTG_REPO:-onebany/wrtg}"
 VER="${VER:-latest}"
 BUNDLE="wrtg-openwrt.tar.gz"
 TMP="/tmp/wrtg-install"
@@ -39,7 +40,7 @@ fetch_optional() { # url dest — returns 0 on success, 1 on 404/missing
 	else return 1; fi
 }
 
-github_mode() { [ -n "${WRTG_REPO:-}" ]; }
+github_mode() { [ -z "$BASE" ]; } # GitHub unless a custom base URL is given
 
 release_base() {
 	if github_mode; then

@@ -215,8 +215,8 @@
 ## 0.5.5 — 2026-07-10
 
 ### Changed
-- **`bootstrap.sh` Gitea-first** — default release host `github.com/onebany/wrtg`;
-  `WRTG_BASE_URL` / `WRTG_RELEASE_URL` override; `WRTG_REPO=o/r` keeps GitHub mode.
+- **`bootstrap.sh`** — installs GitHub releases by default (`WRTG_REPO=owner/repo`);
+  `WRTG_BASE_URL` / `WRTG_RELEASE_URL` point it at a self-hosted Gitea instead.
   Falls back to release binary + source archive when `wrtg-openwrt.tar.gz` is missing.
 - **Install docs** — README and `docs/GUIDE.md` list canonical paths: bootstrap one-liner,
   `ROUTER=… install.sh`, daemon-only update, `SKIP_BUILD=1` without Rust.
