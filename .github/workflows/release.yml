@@ -103,9 +103,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      # Optional: set this repo secret to also publish to the Gitea host that the
-      # default bootstrap.sh install path targets. Absent → the Gitea step is
-      # skipped and only the GitHub release is created (previous behaviour).
+      # Optional: to also mirror the release to a self-hosted Gitea, set BOTH the
+      # `GITEA_TOKEN` repo secret and the `GITEA_API` repo variable (the releases
+      # API base, e.g. https://gitea.example/api/v1/repos/owner/repo). If either
+      # is unset the Gitea step is skipped and only the GitHub release is created.
       GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -140,13 +141,13 @@ jobs:
             bootstrap.sh
             dist/SHA256SUMS
 
-      # Mirror the release to the Gitea host (the default install target in
-      # bootstrap.sh / README). Runs only when GITEA_TOKEN is configured, so it
-      # never affects the GitHub-only flow. Override the host via GITEA_API.
+      # Optional mirror to a self-hosted Gitea. Runs only when both GITEA_TOKEN
+      # (secret) and GITEA_API (variable) are set, so it never affects the
+      # GitHub-only flow and hardcodes no host.
       - name: Publish to Gitea
-        if: ${{ env.GITEA_TOKEN != '' }}
+        if: ${{ env.GITEA_TOKEN != '' && env.GITEA_API != '' }}
         env:
-          GITEA_API: ${{ vars.GITEA_API || 'https://github.com/api/v1/repos/bany/wrtg' }}
+          GITEA_API: ${{ vars.GITEA_API }}
         run: |
           set -eu
           TAG="${GITHUB_REF#refs/tags/}"
