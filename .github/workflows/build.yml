@@ -15,7 +15,7 @@ jobs:
     name: cargo test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,7 +65,7 @@ jobs:
             out: wrtg-linux-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set version
         run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
@@ -94,7 +94,7 @@ jobs:
           chmod +x "dist/${{ matrix.out }}"
           file "dist/${{ matrix.out }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.out }}
           path: dist/${{ matrix.out }}
