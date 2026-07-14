@@ -39,6 +39,22 @@ impl<K: Eq + Hash> TtlMap<K> {
         self.lock().insert(key, Instant::now() + ttl);
     }
 
+    /// Mark `key` only if it is missing or already expired. Returns whether a
+    /// new entry was inserted (used to avoid pushing cooldown expiry forward on
+    /// every concurrent failure).
+    pub fn mark_if_absent(&self, key: K, ttl: Duration) -> bool {
+        let mut map = self.lock();
+        let now = Instant::now();
+        if let Some(expiry) = map.get(&key) {
+            if now < *expiry {
+                return false;
+            }
+            map.remove(&key);
+        }
+        map.insert(key, now + ttl);
+        true
+    }
+
     /// Is `key` still within its TTL? Expired entries are removed on access.
     pub fn is_active(&self, key: &K) -> bool {
         let mut map = self.lock();
@@ -94,6 +110,16 @@ mod tests {
         assert!(!m.is_active(&(2, false)));
         assert!(m.clear(&(1, false)));
         assert!(!m.is_active(&(1, false)));
+    }
+
+    #[test]
+    fn mark_if_absent_does_not_extend_active_entry() {
+        let m: TtlMap<i32> = TtlMap::new();
+        assert!(m.mark_if_absent(1, Duration::from_secs(60)));
+        assert!(!m.mark_if_absent(1, Duration::from_secs(120)));
+        m.mark_expired(1);
+        assert!(m.mark_if_absent(1, Duration::from_secs(30)));
+        assert!(m.is_active(&1));
     }
 
     #[test]

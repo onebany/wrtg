@@ -32,11 +32,23 @@ pub fn ws_blacklisted(dc: i32, is_media: bool) -> bool {
     BLACKLIST.is_active(&(dc, is_media))
 }
 
+pub fn clear_ws_blacklisted(dc: i32, is_media: bool) {
+    if BLACKLIST.clear(&(dc, is_media)) {
+        let media_tag = if is_media { " media" } else { "" };
+        log::debug!("DC{dc}{media_tag} WS blacklist cleared");
+    }
+}
+
 pub fn mark_ws_blacklisted(dc: i32, is_media: bool) {
-    let ttl_secs = blacklist_ttl().as_secs();
-    BLACKLIST.mark((dc, is_media), blacklist_ttl());
+    let ttl = blacklist_ttl();
+    if !BLACKLIST.mark_if_absent((dc, is_media), ttl) {
+        return;
+    }
     let media_tag = if is_media { " media" } else { "" };
-    log::info!("DC{dc}{media_tag} WS blacklisted for {ttl_secs}s (HTTP 302 on all domains)");
+    log::info!(
+        "DC{dc}{media_tag} WS blacklisted for {}s (HTTP 302 on all domains)",
+        ttl.as_secs()
+    );
 }
 
 #[cfg(test)]
@@ -62,6 +74,16 @@ mod tests {
         mark_ws_blacklisted(2, false);
         assert!(ws_blacklisted(2, false));
         assert!(!ws_blacklisted(2, true));
+    }
+
+    #[test]
+    fn blacklist_does_not_extend_active_ttl() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset_blacklist_for_test();
+        mark_ws_blacklisted(2, false);
+        mark_ws_blacklisted(2, false);
+        BLACKLIST.mark_expired((2, false));
+        assert!(!ws_blacklisted(2, false));
     }
 
     #[test]

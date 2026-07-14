@@ -14,7 +14,8 @@ use wrtg::cf_worker_pool::{start_refill_task as start_cf_refill, warmup_pools as
 use wrtg::config::{apply_config, load_from_env};
 use wrtg::handshake::read_client_init;
 use wrtg::mtproto::{
-    dc_from_orig_dst, generate_relay_init, proto_tag_for, CryptoCtx, HandshakeInfo,
+    dc_from_orig_dst, generate_relay_init, proto_tag_for, ws_redirect_blacklist_warranted,
+    ws_target_ip, CryptoCtx, HandshakeInfo,
 };
 use wrtg::sockopt::{get_original_dst, tune_tcp};
 use wrtg::watchdog::{bind_transparent, serve};
@@ -242,7 +243,10 @@ async fn handle_handshake(
                 client = c;
                 ctx = cx;
                 if all_blocked {
-                    mark_ws_blacklisted(hs.dc, bridge_media);
+                    let target = ws_target_ip(hs.dc, orig_ip);
+                    if ws_redirect_blacklist_warranted(hs.dc, &target) {
+                        mark_ws_blacklisted(hs.dc, bridge_media);
+                    }
                 }
             }
         }

@@ -240,6 +240,22 @@ pub fn ws_target_ip(dc: i32, orig_ip: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether an all-HTTP-302 WS outcome should trigger the per-DC blacklist.
+///
+/// On the stock `149.154.167.220` front, DC1/3/5 always get HTTP 302 — that is
+/// expected and means "use CF worker", not "blacklist direct WS for 45 minutes".
+pub fn ws_redirect_blacklist_warranted(dc: i32, target_ip: &str) -> bool {
+    if target_ip.is_empty() {
+        return true;
+    }
+    let dc_key = if dc == 203 { 2 } else { dc };
+    let front = dc_front_ip(dc_key);
+    if front.is_empty() || front != target_ip {
+        return true;
+    }
+    target_ip == front_ip() && matches!(dc_key, 2 | 4)
+}
+
 pub fn tcp_target_ip(dc: i32, orig_ip: &str, is_media: bool) -> String {
     if is_media && !orig_ip.is_empty() && dc_alt_ips().contains_key(orig_ip) {
         return orig_ip.to_string();
@@ -731,6 +747,26 @@ mod tests {
         with_front_ip("", || {
             assert_eq!(ws_target_ip(2, "149.154.167.51"), "149.154.167.51");
             assert_eq!(ws_target_ip(3, ""), "149.154.175.100");
+        });
+    }
+
+    #[test]
+    fn ws_redirect_blacklist_warranted_stock_front() {
+        with_front_ip("149.154.167.220", || {
+            assert!(ws_redirect_blacklist_warranted(2, "149.154.167.220"));
+            assert!(ws_redirect_blacklist_warranted(4, "149.154.167.220"));
+            let prev_dc_front = dc_front_ips_cell().read().unwrap().clone();
+            set_dc_front_ip(3, "149.154.167.220".to_string());
+            set_dc_front_ip(5, "149.154.167.220".to_string());
+            assert!(!ws_redirect_blacklist_warranted(3, "149.154.167.220"));
+            assert!(!ws_redirect_blacklist_warranted(5, "149.154.167.220"));
+            assert!(ws_redirect_blacklist_warranted(3, "149.154.175.100"));
+            *dc_front_ips_cell().write().unwrap() = prev_dc_front;
+
+            let prev_dcs = front_dcs_cell().read().unwrap().clone();
+            set_front_dcs(vec![1, 2, 3, 4, 5]);
+            assert!(!ws_redirect_blacklist_warranted(1, "149.154.167.220"));
+            set_front_dcs(prev_dcs);
         });
     }
 

@@ -14,6 +14,14 @@
 
 ## Recent behavior changes
 
+### 0.5.18
+
+- **WS skip-state recovery** — cooldown/blacklist entries no longer extend their TTL
+  on repeated marks; successful CF Worker / CF Proxy / TCP fallback clears
+  `ip_fail`, `dc_fail`, and `ws_blacklist` for that DC. HTTP 302 on the stock
+  front for DC1/3/5 no longer triggers the 45-minute WS blacklist (expected → use
+  CF Worker).
+
 ### 0.5.13
 
 - **MTProto-over-HTTP `:80` Host header** — local `FRONT_IP` passthrough keeps the

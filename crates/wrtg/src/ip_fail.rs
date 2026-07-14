@@ -29,10 +29,13 @@ pub fn mark_ip_failed(ip: &str, dc: i32) {
     if ip.is_empty() {
         return;
     }
-    IP_FAIL.mark((ip.to_string(), dc), cooldown());
+    let ttl = cooldown();
+    if !IP_FAIL.mark_if_absent((ip.to_string(), dc), ttl) {
+        return;
+    }
     log::info!(
         "IP {ip} DC{dc} marked failed for {}s (skip direct WS)",
-        cooldown().as_secs()
+        ttl.as_secs()
     );
 }
 
@@ -91,13 +94,23 @@ pub fn ws_connect_timeout(dc: i32, is_media: bool) -> Duration {
 }
 
 pub fn mark_dc_failed(dc: i32, is_media: bool) {
-    DC_FAIL.mark((dc, is_media), dc_fail_cooldown());
+    let ttl = dc_fail_cooldown();
+    if !DC_FAIL.mark_if_absent((dc, is_media), ttl) {
+        return;
+    }
     log::info!(
         "DC{dc}{} marked failed for {}s (WS timeout {}s)",
         if is_media { "m" } else { "" },
-        dc_fail_cooldown().as_secs(),
+        ttl.as_secs(),
         ws_timeout_fast().as_secs()
     );
+}
+
+/// Clear direct-WS skip state after a fallback path succeeds.
+pub fn clear_ws_skip_state(ip: &str, dc: i32, is_media: bool) {
+    clear_ip_fail(ip, dc);
+    clear_dc_fail(dc, is_media);
+    crate::ws_blacklist::clear_ws_blacklisted(dc, is_media);
 }
 
 pub fn clear_dc_fail(dc: i32, is_media: bool) {
@@ -147,6 +160,17 @@ mod tests {
         // Future entry: still skipping.
         IP_FAIL.mark(key.clone(), Duration::from_secs(60));
         assert!(should_skip_direct_ws("9.9.9.9", 3));
+        reset_all();
+    }
+
+    #[test]
+    fn ip_fail_does_not_extend_active_cooldown() {
+        let _g = TEST_LOCK.lock().unwrap();
+        reset_all();
+        mark_ip_failed("1.2.3.4", 2);
+        mark_ip_failed("1.2.3.4", 2);
+        IP_FAIL.mark_expired(("1.2.3.4".to_string(), 2));
+        assert!(!should_skip_direct_ws("1.2.3.4", 2));
         reset_all();
     }
 

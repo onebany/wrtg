@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.18 - 2026-07-14
+
+### Fixed
+- **Sticky WS skip-state** - `ip_fail` / `dc_fail` / `ws_blacklist` no longer refresh TTL on every repeated mark (which could tile a cooldown indefinitely under load). Successful CF Worker / CF Proxy / TCP fallback clears skip-state for that DC so normal WS can recover. Stock-front HTTP 302 for DC1/3/5 no longer enters the 45-minute WS blacklist (expected path is CF Worker).
+
 ## 0.5.17 — 2026-07-12
 
 ### Internal / refactor
