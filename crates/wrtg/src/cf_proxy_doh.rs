@@ -95,10 +95,17 @@ fn parse_doh_a_records(body: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(body);
     let mut out = Vec::new();
     // Only look inside the "Answer" array, then walk each `{…}` record. DoH
-    // answer records are flat objects, so splitting on `{` isolates them.
-    let Some((_, answer)) = text.split_once("\"Answer\"") else {
+    // answer records are flat objects, so splitting on `{` isolates them, and
+    // the first `]` after the opening `[` closes the array — bound the scan
+    // there so type-A records in a later "Authority" / "Additional" (glue)
+    // section can't leak an address that was never in the answer.
+    let Some((_, after)) = text.split_once("\"Answer\"") else {
         return out;
     };
+    let Some((_, array)) = after.split_once('[') else {
+        return out;
+    };
+    let answer = array.split(']').next().unwrap_or(array);
     for rec in answer.split('{').skip(1) {
         if !record_is_type_a(rec) {
             continue;
@@ -260,6 +267,17 @@ mod tests {
             {"name":"x.co.uk","type":16,"data":"v=spf1 -all"},
             {"name":"x.co.uk","type":1,"data":"104.21.75.42"}
         ]}"#;
+        let ips = parse_doh_a_records(json);
+        assert_eq!(ips, vec!["104.21.75.42".to_string()]);
+    }
+
+    #[test]
+    fn parse_doh_a_records_ignores_non_answer_sections() {
+        // A type-A record in the "Additional" (glue) section must not leak into
+        // the result: only the address inside the "Answer" array is returned.
+        let json = br#"{"Status":0,
+            "Answer":[{"name":"x.co.uk","type":1,"data":"104.21.75.42"}],
+            "Additional":[{"name":"ns1.example.","type":1,"data":"198.51.100.9"}]}"#;
         let ips = parse_doh_a_records(json);
         assert_eq!(ips, vec!["104.21.75.42".to_string()]);
     }
