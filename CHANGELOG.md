@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.19 - 2026-07-16
+
+### Fixed
+- **DoH answer parsing** — `parse_doh_a_records` now confines its scan to the `"Answer"` array instead of walking the whole response body, so glue A-records from `Authority`/`Additional` sections can no longer be picked as the resolved IP on the CF-proxy fallback path (which caused SNI/cert mismatches). Added regression test.
+
+### Changed
+- **Dependencies** — bumped Cargo deps (`aes` 0.8→0.9, `ctr` 0.9→0.10, `rand` 0.8→0.10, `socket2` 0.5→0.6, `bytes`, `rustls`) and GitHub Actions (`actions/checkout` v4→v7, `upload`/`download-artifact`, `softprops/action-gh-release`). Migrated the code to the `rand` 0.10 API (`rand::rng()`, `Rng`/`RngExt`, `distr::Alphanumeric`).
+
 ## 0.5.18 - 2026-07-14
 
 ### Fixed
