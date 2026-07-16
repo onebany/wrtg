@@ -2,7 +2,7 @@
 
 Прозрачный TCP-прокси Telegram для OpenWrt. nftables перенаправляет трафик к IP Telegram на локальный демон, который мостит MTProto через WebSocket и Cloudflare fallback. Клиентам прокси настраивать не нужно.
 
-**Version:** 0.5.19 · **Last updated:** 2026-07-16
+**Version:** 0.5.20 · **Last updated:** 2026-07-16
 
 История релизов — [`CHANGELOG.md`](CHANGELOG.md) · Релизы — [GitHub](https://github.com/onebany/wrtg/releases) · Исходник CF Worker — [`openwrt/cf-worker.js`](openwrt/cf-worker.js).
 
@@ -53,7 +53,7 @@ wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 `bootstrap.sh` скачивает релиз и запускает `install.sh` (бинарник, конфиг, nft, cron, LuCI).  
 Релизы: [GitHub](https://github.com/onebany/wrtg/releases).
 
-Опции через env: `VER=v0.5.19`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
+Опции через env: `VER=v0.5.20`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
 
 После установки:
 
