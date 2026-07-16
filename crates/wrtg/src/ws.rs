@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::mtproto::MAX_WS_PAYLOAD;
 use crate::sockopt::tune_tcp;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use rand::RngCore;
+use rand::Rng;
 use rustls::pki_types::ServerName;
 use sha1::{Digest, Sha1};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -157,7 +157,7 @@ async fn connect_ws_inner(
 
     let ws_key = {
         let mut key = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
         STANDARD.encode(key)
     };
 
@@ -590,7 +590,7 @@ fn build_ws_frame(opcode: u8, data: &[u8], mask: bool) -> Vec<u8> {
         return hdr;
     }
     let mut mask_key = [0u8; 4];
-    rand::thread_rng().fill_bytes(&mut mask_key);
+    rand::rng().fill_bytes(&mut mask_key);
     let masked = xor_mask_owned(data, &mask_key);
     let mut hdr = ws_header_masked(fb, length, &mask_key);
     hdr.extend_from_slice(&masked);
