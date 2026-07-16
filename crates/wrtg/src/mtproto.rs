@@ -3,7 +3,7 @@ use std::sync::{OnceLock, RwLock};
 
 use aes::Aes256;
 use ctr::cipher::{KeyIvInit, StreamCipher};
-use rand::RngCore;
+use rand::Rng;
 
 type Aes256Ctr = ctr::Ctr128BE<Aes256>;
 
@@ -401,7 +401,7 @@ pub fn parse_direct_handshake(handshake: &[u8]) -> Result<HandshakeInfo, String>
 }
 
 pub fn generate_relay_init(proto_tag: [u8; 4], dc_idx: i16) -> Result<Vec<u8>, String> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     loop {
         let mut rnd = vec![0u8; HANDSHAKE_LEN];
         rng.fill_bytes(&mut rnd);
