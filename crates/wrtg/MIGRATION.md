@@ -14,6 +14,15 @@
 
 ## Recent behavior changes
 
+### 0.5.19
+
+- **DoH answer parsing** — `parse_doh_a_records` is now scoped to the `"Answer"`
+  array; glue A-records in `Authority`/`Additional` are ignored so the CF-proxy
+  fallback can't dial a non-answer IP under the original SNI/Host.
+- **Dep bumps** — `rand` moved to 0.10 (`rand::rng()`, `Rng`/`RngExt`,
+  `distr::Alphanumeric`); `aes` 0.9 / `ctr` 0.10 / `socket2` 0.6 updated. No
+  public API or behaviour change beyond the DoH fix.
+
 ### 0.5.18
 
 - **WS skip-state recovery** — cooldown/blacklist entries no longer extend their TTL
