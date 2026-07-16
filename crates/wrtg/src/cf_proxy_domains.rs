@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -146,8 +146,8 @@ pub fn apply_proxy_domains(domains: Vec<String>) {
 }
 
 pub async fn fetch_cfproxy_domains() -> Vec<String> {
-    let cache_bust: String = rand::thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
+    let cache_bust: String = rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
         .take(7)
         .map(char::from)
         .collect();
