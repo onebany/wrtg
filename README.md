@@ -4,105 +4,43 @@
 
 **Version:** 0.5.19 · **Last updated:** 2026-07-16
 
-История релизов — [`CHANGELOG.md`](CHANGELOG.md). Исходник CF Worker — [`openwrt/cf-worker.js`](openwrt/cf-worker.js).
-
-Релизы: [GitHub](https://github.com/onebany/wrtg/releases)
+История релизов — [`CHANGELOG.md`](CHANGELOG.md) · Релизы — [GitHub](https://github.com/onebany/wrtg/releases) · Исходник CF Worker — [`openwrt/cf-worker.js`](openwrt/cf-worker.js).
 
 ---
 
-## Что такое wrtg
+## Оглавление
 
-**wrtg** — прозрачный TCP-прокси Telegram для OpenWrt. Клиентам не нужно настраивать прокси: nftables перенаправляет исходящий TCP к IP Telegram (порты 80, 443, 5222) на локальный демон, который расшифровывает MTProto handshake и перенаправляет трафик через WebSocket, Cloudflare Worker или прямое TCP-соединение. Работает через **DNAT** и `SO_ORIGINAL_DST`, без kernel TPROXY.
-
----
-
-## Сокращения
-
-| Термин | Расшифровка |
-|--------|-------------|
-| **DNAT** | Destination NAT — подмена адреса назначения в nftables; клиент думает, что идёт на IP Telegram, а пакет попадает на роутер. |
-| **DC** | Data Center — дата-центр Telegram (DC1…DC5, DC203). |
-| **MTProto** | Протокол Telegram; wrtg обрабатывает obfuscated2 handshake (64 байта). |
-| **WSS** | WebSocket over TLS — `wss://kws{N}.web.telegram.org/apiws`. |
-| **FRONT_IP** | IP «фронта» Telegram (по умолчанию `149.154.167.220`); WS-подключение идёт сюда, Host остаётся `kws{N}.web.telegram.org`. |
-| **CF Worker** | Cloudflare Worker — serverless-скрипт на `*.workers.dev`; WSS/TCP fallback и media passthrough. |
-| **CF Proxy** | Домен за Cloudflare CDN (оранжевое облако); альтернативный WSS fallback через `wss://kws{N}.<domain>/apiws`. |
-| **dc_learn** | Self-learning: из handshake запоминается соответствие `orig_ip → DC` в `dc-ips-learned.txt`. |
-| **Worker passthrough** | Туннель TLS/HTTP media через CF Worker к реальному `dst:port` Telegram. |
-| **TLS fronting** | Opt-in: TCP к целевому IP, SNI из `WRTG_FRONTING_SNI`, Host `kws{N}.web.telegram.org`. |
-| **blind relay** | Проброс байт без расшифровки MTProto (TLS, HTTP, нераспознанный трафик). |
-| **ws_blacklist** | TTL-блокировка DC после HTTP 302 на все WS-домены; direct WS пропускается. |
-| **DoH** | DNS over HTTPS — резолв CF Proxy доменов при fallback. |
+- [Быстрый старт](#быстрый-старт)
+- [Установка](#установка)
+- [Настройка](#настройка)
+- [CF Worker](#cf-worker)
+- [CF Proxy (opt-in)](#cf-proxy-opt-in)
+- [Диагностика](#диагностика)
+- [Ограничения](#ограничения)
+- [Как это работает](#как-это-работает) — архитектура, поток соединения, модули
+- [Глоссарий](#глоссарий)
+- [Проверки перед релизом (разработчикам)](#проверки-перед-релизом-разработчикам)
 
 ---
 
-## Архитектура
+## Быстрый старт
 
-### Развёртывание
+На роутере OpenWrt:
 
-```mermaid
-flowchart LR
-    Client["Telegram / браузер"] --> NFT["nftables DNAT → :8443"]
-    NFT --> WRTG["wrtg daemon"]
-    WRTG --> Net["FRONT_IP · direct WS · CF Worker · CF Proxy · TCP"]
+```sh
+wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 ```
 
-1. **nftables** (`inet tg_tproxy`, chain `prerouting`) перехватывает TCP 80/443/5222 к CIDR Telegram из `/var/lib/wrtg/cidrs.txt` (официальный список + опционально `/etc/wrtg/cidr-extra.txt` через `update-cidr.sh`).
-2. **DNAT** перенаправляет на `ROUTER_IP:8443`.
-3. **wrtg** слушает с `IP_TRANSPARENT`, восстанавливает оригинальный адрес через `SO_ORIGINAL_DST`.
+Проверка после установки:
 
-| Компонент | Путь |
-|-----------|------|
-| Бинарник | `/usr/sbin/wrtg` |
-| Конфиг | `/etc/wrtg/config` |
-| CIDR | `/var/lib/wrtg/cidrs.txt` |
-| Init | `/etc/init.d/wrtg` (procd, START=95) |
-
-### Поток соединения
-
-```mermaid
-flowchart TD
-    Start(["TCP :8443"]) --> Classify{"Первые байты"}
-    Classify -->|"TLS / HTTP"| PT["blind relay (worker passthrough → front)"]
-    Classify -->|"MTProto obfuscated2"| Crypto["handshake + relay-init + AES-CTR"]
-    Crypto --> Chain["blacklist/ip_fail? → pool → direct WS → TLS fronting* → CF Worker → CF Proxy → TCP → blind relay"]
-    Chain --> Done(["Сессия"])
-    PT --> Done
+```sh
+/etc/init.d/wrtg status
+wrtg --check          # DNS + WSS probes; exit 0 = OK
 ```
 
-\* TLS fronting — только при `WRTG_FRONTING_SNI`.
+Откройте Telegram в LAN — в логах (`logread -e wrtg`) появится `direct handshake OK` или `WS connected`. Клиентам ничего настраивать не нужно.
 
-**Fallback chain (MTProto):**
-
-Перед direct WS: **`ws_blacklist`** (HTTP 302 на все WS-домены DC) и **`ip_fail`** (timeout к FRONT_IP) — если активны, пропускается весь блок direct WS (pool + direct + fronting).
-
-1. **Direct WS pool** — переиспользование открытого WSS (только non-media, DC с настроенным front).
-2. **Direct WS** — новое WSS на `FRONT_IP` или реальный IP DC (`WRTG_FRONT_DCS`, `DC{N}_FRONT_IP`).
-3. **TLS fronting** — opt-in, cooldown после неудачи.
-4. **CF Worker pool / direct** — WSS через ваш Worker; несколько Worker — round-robin по DC, последовательные попытки.
-5. **CF Proxy** — WSS через свой домен или opt-in публичный pool (`WRTG_CFPROXY_AUTO=1`); до 3 доменов, второй и третий — параллельный race.
-6. **TCP fallback** — прямое TCP на FRONT_IP или media CDN.
-7. **blind relay** — если ничего не сработало или трафик не MTProto (сначала worker passthrough, затем front passthrough).
-
-**Дополнительно:**
-
-| Механизм | Назначение |
-|----------|------------|
-| `dc_learn` | Запоминает `orig_ip → DC` из handshake → `dc-ips-learned.txt`; admin override в `dc-ips.txt`. |
-| `ip_fail_until` | Cooldown на FRONT_IP после WS timeout — пропуск direct WS. |
-| Worker passthrough | TLS/HTTP media через `wss://worker/apiws?dst=ip&port=` к реальному DC. |
-
-### Модули (Rust)
-
-| Модуль | Роль |
-|--------|------|
-| `main`, `handshake`, `mtproto` | Accept, классификация, crypto |
-| `bridge`, `ws`, `tls` | Relay, WSS, TLS passthrough |
-| `ws_pool`, `cf_worker_pool` | Bounded connection pools |
-| `ws_blacklist`, `ip_fail` | TTL blacklist, FRONT_IP cooldown |
-| `dc_learn` | IP → DC mapping |
-| `cf_proxy`, `cf_balancer`, `cf_proxy_domains` | CF Proxy fallback, DoH, auto-pool |
-| `config`, `watchdog`, `sockopt` | Startup, listener recovery, transparent socket |
+Если DC1/DC3/DC5 отвечают HTTP 302 на direct WS (частая ситуация) — настройте [CF Worker](#cf-worker).
 
 ---
 
@@ -335,6 +273,98 @@ logread -e wrtg | grep -i 'CF proxy'
 - **IPv4 only** — `SO_ORIGINAL_DST` работает только с IPv4.
 - **Worker deploy** — изменение `openwrt/cf-worker.js` требует отдельного deploy в Cloudflare.
 - **Публичный CF Proxy pool** — opt-in, не контролируется проектом.
+
+---
+
+## Как это работает
+
+**wrtg** — прозрачный TCP-прокси Telegram для OpenWrt. Клиентам не нужно настраивать прокси: nftables перенаправляет исходящий TCP к IP Telegram (порты 80, 443, 5222) на локальный демон, который расшифровывает MTProto handshake и перенаправляет трафик через WebSocket, Cloudflare Worker или прямое TCP-соединение. Работает через **DNAT** и `SO_ORIGINAL_DST`, без kernel TPROXY.
+
+### Развёртывание
+
+```mermaid
+flowchart LR
+    Client["Telegram / браузер"] --> NFT["nftables DNAT → :8443"]
+    NFT --> WRTG["wrtg daemon"]
+    WRTG --> Net["FRONT_IP · direct WS · CF Worker · CF Proxy · TCP"]
+```
+
+1. **nftables** (`inet tg_tproxy`, chain `prerouting`) перехватывает TCP 80/443/5222 к CIDR Telegram из `/var/lib/wrtg/cidrs.txt` (официальный список + опционально `/etc/wrtg/cidr-extra.txt` через `update-cidr.sh`).
+2. **DNAT** перенаправляет на `ROUTER_IP:8443`.
+3. **wrtg** слушает с `IP_TRANSPARENT`, восстанавливает оригинальный адрес через `SO_ORIGINAL_DST`.
+
+| Компонент | Путь |
+|-----------|------|
+| Бинарник | `/usr/sbin/wrtg` |
+| Конфиг | `/etc/wrtg/config` |
+| CIDR | `/var/lib/wrtg/cidrs.txt` |
+| Init | `/etc/init.d/wrtg` (procd, START=95) |
+
+### Поток соединения
+
+```mermaid
+flowchart TD
+    Start(["TCP :8443"]) --> Classify{"Первые байты"}
+    Classify -->|"TLS / HTTP"| PT["blind relay (worker passthrough → front)"]
+    Classify -->|"MTProto obfuscated2"| Crypto["handshake + relay-init + AES-CTR"]
+    Crypto --> Chain["blacklist/ip_fail? → pool → direct WS → TLS fronting* → CF Worker → CF Proxy → TCP → blind relay"]
+    Chain --> Done(["Сессия"])
+    PT --> Done
+```
+
+\* TLS fronting — только при `WRTG_FRONTING_SNI`.
+
+**Fallback chain (MTProto):**
+
+Перед direct WS: **`ws_blacklist`** (HTTP 302 на все WS-домены DC) и **`ip_fail`** (timeout к FRONT_IP) — если активны, пропускается весь блок direct WS (pool + direct + fronting).
+
+1. **Direct WS pool** — переиспользование открытого WSS (только non-media, DC с настроенным front).
+2. **Direct WS** — новое WSS на `FRONT_IP` или реальный IP DC (`WRTG_FRONT_DCS`, `DC{N}_FRONT_IP`).
+3. **TLS fronting** — opt-in, cooldown после неудачи.
+4. **CF Worker pool / direct** — WSS через ваш Worker; несколько Worker — round-robin по DC, последовательные попытки.
+5. **CF Proxy** — WSS через свой домен или opt-in публичный pool (`WRTG_CFPROXY_AUTO=1`); до 3 доменов, второй и третий — параллельный race.
+6. **TCP fallback** — прямое TCP на FRONT_IP или media CDN.
+7. **blind relay** — если ничего не сработало или трафик не MTProto (сначала worker passthrough, затем front passthrough).
+
+**Дополнительно:**
+
+| Механизм | Назначение |
+|----------|------------|
+| `dc_learn` | Запоминает `orig_ip → DC` из handshake → `dc-ips-learned.txt`; admin override в `dc-ips.txt`. |
+| `ip_fail_until` | Cooldown на FRONT_IP после WS timeout — пропуск direct WS. |
+| Worker passthrough | TLS/HTTP media через `wss://worker/apiws?dst=ip&port=` к реальному DC. |
+
+### Модули (Rust)
+
+| Модуль | Роль |
+|--------|------|
+| `main`, `handshake`, `mtproto` | Accept, классификация, crypto |
+| `bridge`, `ws`, `tls` | Relay, WSS, TLS passthrough |
+| `ws_pool`, `cf_worker_pool` | Bounded connection pools |
+| `ws_blacklist`, `ip_fail` | TTL blacklist, FRONT_IP cooldown |
+| `dc_learn` | IP → DC mapping |
+| `cf_proxy`, `cf_balancer`, `cf_proxy_domains` | CF Proxy fallback, DoH, auto-pool |
+| `config`, `watchdog`, `sockopt` | Startup, listener recovery, transparent socket |
+
+---
+
+## Глоссарий
+
+| Термин | Расшифровка |
+|--------|-------------|
+| **DNAT** | Destination NAT — подмена адреса назначения в nftables; клиент думает, что идёт на IP Telegram, а пакет попадает на роутер. |
+| **DC** | Data Center — дата-центр Telegram (DC1…DC5, DC203). |
+| **MTProto** | Протокол Telegram; wrtg обрабатывает obfuscated2 handshake (64 байта). |
+| **WSS** | WebSocket over TLS — `wss://kws{N}.web.telegram.org/apiws`. |
+| **FRONT_IP** | IP «фронта» Telegram (по умолчанию `149.154.167.220`); WS-подключение идёт сюда, Host остаётся `kws{N}.web.telegram.org`. |
+| **CF Worker** | Cloudflare Worker — serverless-скрипт на `*.workers.dev`; WSS/TCP fallback и media passthrough. |
+| **CF Proxy** | Домен за Cloudflare CDN (оранжевое облако); альтернативный WSS fallback через `wss://kws{N}.<domain>/apiws`. |
+| **dc_learn** | Self-learning: из handshake запоминается соответствие `orig_ip → DC` в `dc-ips-learned.txt`. |
+| **Worker passthrough** | Туннель TLS/HTTP media через CF Worker к реальному `dst:port` Telegram. |
+| **TLS fronting** | Opt-in: TCP к целевому IP, SNI из `WRTG_FRONTING_SNI`, Host `kws{N}.web.telegram.org`. |
+| **blind relay** | Проброс байт без расшифровки MTProto (TLS, HTTP, нераспознанный трафик). |
+| **ws_blacklist** | TTL-блокировка DC после HTTP 302 на все WS-домены; direct WS пропускается. |
+| **DoH** | DNS over HTTPS — резолв CF Proxy доменов при fallback. |
 
 ---
 
