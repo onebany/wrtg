@@ -64,14 +64,35 @@ parse_tag_name() { # json_file -> echoes tag
 	[ -n "$_tag" ] && printf '%s' "$_tag"
 }
 
+resolve_latest_github_atom() {
+	# Resolve the latest tag from the releases atom feed instead of
+	# api.github.com. The REST API rate-limits unauthenticated requests to
+	# 60/hour per IP, so shared/CGNAT ISP addresses often get HTTP 403 here;
+	# the atom feed is served from github.com and is not subject to that limit.
+	_atom="https://github.com/${WRTG_REPO:-onebany/wrtg}/releases.atom"
+	fetch_optional "$_atom" "$TMP/releases.atom" || return 1
+	_tag="$(grep -o 'releases/tag/[^"]*' "$TMP/releases.atom" | head -n1 | sed 's#.*releases/tag/##' | tr -d '\r')"
+	[ -n "$_tag" ] || return 1
+	printf '%s' "$_tag"
+}
+
 resolve_latest_ver() {
 	_rb="$(release_base)"
 	if github_mode; then
+		# Prefer the atom feed (no API rate limit); fall back to the REST API.
+		_tag="$(resolve_latest_github_atom)"
+		[ -n "$_tag" ] && { printf '%s' "$_tag"; return 0; }
 		_api="https://api.github.com/repos/${WRTG_REPO:-onebany/wrtg}/releases/latest"
 	else
 		_api="$(gitea_api_base)/releases/latest"
 	fi
-	fetch "$_api" "$TMP/latest.json" || err "cannot resolve latest release from $_api"
+	if ! fetch_optional "$_api" "$TMP/latest.json"; then
+		if github_mode; then
+			err "cannot resolve latest release (atom feed and API both failed) — pass an explicit VER=vX.Y.Z"
+		else
+			err "cannot resolve latest release from $_api"
+		fi
+	fi
 	_tag="$(parse_tag_name "$TMP/latest.json" | tr -d '\r')"
 	[ -n "$_tag" ] || err "latest release tag not found in API response"
 	printf '%s' "$_tag"

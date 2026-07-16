@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.20 - 2026-07-16
+
+### Fixed
+- **bootstrap: HTTP 403 on `releases/latest`** — `resolve_latest_ver` now reads the tag from the `releases.atom` feed on `github.com` instead of the `api.github.com` REST endpoint, which rate-limits unauthenticated requests to 60/hour per IP (shared/CGNAT ISP addresses routinely hit HTTP 403). The REST API is kept as a fallback, and a clearer error suggests passing an explicit `VER=vX.Y.Z`.
+
 ## 0.5.19 - 2026-07-16
 
 ### Fixed
