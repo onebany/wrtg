@@ -53,7 +53,7 @@ wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 `bootstrap.sh` скачивает релиз и запускает `install.sh` (бинарник, конфиг, nft, cron, LuCI).  
 Релизы: [GitHub](https://github.com/onebany/wrtg/releases).
 
-Опции через env: `VER=v0.5.20`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
+Опции через env: `VER=v0.5.21`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
 
 После установки:
 

@@ -15,14 +15,20 @@ OFFICIAL="$TMP.official"
 VALID_OFFICIAL="$TMP.valid-official"
 trap 'rm -f "$TMP" "$OFFICIAL" "$VALID_OFFICIAL"' EXIT HUP INT TERM
 
+# Ensure OFFICIAL exists even when the fetch tool fails before creating -O output
+# (common with OpenWrt uclient-fetch/wget on TLS/DNS errors). Otherwise
+# `set -e` aborts on `< "$OFFICIAL"` and never reaches the built-in defaults.
+: > "$OFFICIAL"
+
 if command -v curl >/dev/null 2>&1; then
 	curl -fsSL --connect-timeout 15 --max-time 60 "$CIDR_URL" > "$OFFICIAL" || true
 elif command -v wget >/dev/null 2>&1; then
 	wget -qO "$OFFICIAL" "$CIDR_URL" || true
 else
-	echo "update-cidr: curl or wget required" >&2
-	exit 1
+	echo "update-cidr: curl or wget required; using built-in defaults" >&2
 fi
+# uclient-fetch may unlink -O on failure — recreate empty so fallback can run.
+[ -f "$OFFICIAL" ] || : > "$OFFICIAL"
 
 valid_ipv4_cidrs < "$OFFICIAL" > "$VALID_OFFICIAL"
 OFFICIAL_COUNT="$(wc -l < "$VALID_OFFICIAL" | tr -d ' ')"

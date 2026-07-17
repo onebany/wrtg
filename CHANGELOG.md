@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.21 - 2026-07-17
+
+### Fixed
+- **First install ubus noise** — `install.sh` uses `start` when wrtg is not yet running, instead of `restart` (which stops and deletes a procd instance that never existed and prints `Command failed: Not found`).
+- **CIDR fetch fallback** — `update-cidr.sh` always creates the official-list temp file before fetch, recreates it if wget/uclient-fetch unlinks on failure, and falls back to built-in defaults without hard-exiting when curl/wget are missing.
+
 ## 0.5.20 - 2026-07-16
 
 ### Fixed
