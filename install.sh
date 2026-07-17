@@ -216,7 +216,13 @@ install_files() {
 
 	if [ "$NO_START" != "1" ]; then
 		"$INITD" enable
-		"$INITD" restart
+		# Prefer start on first install: restart → stop → ubus service delete
+		# prints "Command failed: Not found" when the procd instance never existed.
+		if pidof wrtg >/dev/null 2>&1; then
+			"$INITD" restart
+		else
+			"$INITD" start
+		fi
 		[ -x /etc/init.d/cron ] && { /etc/init.d/cron enable 2>/dev/null || true; /etc/init.d/cron start 2>/dev/null || true; }
 	fi
 }
@@ -309,7 +315,12 @@ CRON=/etc/crontabs/root; mkdir -p "$(dirname "$CRON")"; touch "$CRON"
 grep -qF "$ETC/update-cidr.sh" "$CRON" 2>/dev/null || echo "0 ${CIDR_UPDATE_HOUR:-4} * * * $ETC/update-cidr.sh >/dev/null 2>&1" >> "$CRON"
 "$ETC/update-cidr.sh" >/dev/null 2>&1 || true
 if [ "$NO_START" != "1" ]; then
-	"$INITD" enable; "$INITD" restart
+	"$INITD" enable
+	if pidof wrtg >/dev/null 2>&1; then
+		"$INITD" restart
+	else
+		"$INITD" start
+	fi
 	[ -x /etc/init.d/cron ] && { /etc/init.d/cron enable 2>/dev/null || true; /etc/init.d/cron start 2>/dev/null || true; }
 fi
 sleep 1
