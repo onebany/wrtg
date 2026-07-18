@@ -14,6 +14,13 @@
 
 ## Recent behavior changes
 
+### 0.5.22
+
+- **LuCI / on-router update** — `/etc/wrtg/check-update.sh` resolves the latest
+  GitHub release via `releases.atom` (API fallback) and can install the OpenWrt
+  bundle in place while keeping `/etc/wrtg/config`. LuCI Status exposes Check /
+  Update as POST actions with the session auth token. No new daemon env vars.
+
 ### 0.5.19
 
 - **DoH answer parsing** — `parse_doh_a_records` is now scoped to the `"Answer"`

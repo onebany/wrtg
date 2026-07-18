@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.22 - 2026-07-18
+
+### Added
+- **LuCI one-click update** — Status page can check GitHub for a newer release (atom feed, same approach as `bootstrap.sh`) and install it with a button. Preserves `/etc/wrtg/config`, restarts the service, and shows success/error. Update actions are POST-only with the LuCI auth token. CLI: `/etc/wrtg/check-update.sh check|update`.
+
 ## 0.5.21 - 2026-07-17
 
 ### Fixed

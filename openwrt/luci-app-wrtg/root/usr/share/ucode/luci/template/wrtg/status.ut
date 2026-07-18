@@ -3,7 +3,7 @@
 -#}
 
 {%
-import { readfile, popen } from 'fs';
+import { readfile, writefile, popen } from 'fs';
 
 function sh(cmd) {
 	let p = popen(cmd, 'r');
@@ -11,6 +11,16 @@ function sh(cmd) {
 	let out = p.read('all') ?? '';
 	p.close();
 	return trim(out);
+}
+
+function kv_line(text, key) {
+	let pfx = key + '=';
+	for (let line in split(text ?? '', /\n/)) {
+		line = trim(line);
+		if (substr(line, 0, length(pfx)) == pfx)
+			return trim(substr(line, length(pfx)));
+	}
+	return '';
 }
 
 function cfg_val(cfg, key) {
@@ -25,6 +35,23 @@ function cfg_val(cfg, key) {
 	}
 	return '';
 }
+
+// Flash message from action.ut (check/update / invalid token).
+let flash_ok = true;
+let flash_msg = '';
+let flash_raw = readfile('/tmp/wrtg-luci-flash') ?? '';
+if (length(flash_raw)) {
+	let lines = split(flash_raw, /\n/);
+	flash_ok = (trim(lines[0] ?? '') != '0');
+	flash_msg = trim(join('\n', slice(lines, 1)));
+	writefile('/tmp/wrtg-luci-flash', '');
+}
+
+let upd_cache = readfile('/tmp/wrtg-update-status') ?? '';
+let upd_latest = kv_line(upd_cache, 'LATEST');
+let upd_avail = kv_line(upd_cache, 'AVAILABLE') == '1';
+let upd_status = kv_line(upd_cache, 'STATUS');
+let upd_current = kv_line(upd_cache, 'CURRENT');
 
 let version = trim(readfile('/etc/wrtg/version') ?? '');
 let pid = sh('pidof wrtg 2>/dev/null');
@@ -110,6 +137,10 @@ function badge(ok, yes, no) {
 
 <h2>{{ _('wrtg — Telegram proxy') }}</h2>
 
+{% if (length(flash_msg)) { %}
+	<div class="alert-message {{ flash_ok ? 'success' : 'warning' }}" style="white-space:pre-wrap">{{ entityencode(flash_msg) }}</div>
+{% } %}
+
 <div class="wrtg-grid">
 	<div class="wrtg-card">
 		<h4>{{ _('Service') }}</h4>
@@ -117,6 +148,26 @@ function badge(ok, yes, no) {
 		<div class="wrtg-kv"><b>{{ _('Version') }}</b> {{ length(version) ? version : '?' }}</div>
 		<div class="wrtg-kv"><b>PID</b> {{ length(pid) ? pid : '—' }}</div>
 		<div class="wrtg-kv"><b>{{ _('Listen') }}</b> {{ listen }}</div>
+	</div>
+
+	<div class="wrtg-card">
+		<h4>{{ _('Updates') }}</h4>
+		<div class="wrtg-kv"><b>{{ _('Installed') }}</b> {{ length(upd_current) ? upd_current : (length(version) ? version : '?') }}</div>
+		<div class="wrtg-kv"><b>{{ _('Latest') }}</b> {{ length(upd_latest) ? upd_latest : _('— check first') }}</div>
+		<div class="wrtg-kv"><b>{{ _('Status') }}</b>
+			{% if (upd_avail) { %}<span class="y">{{ _('update available') }}</span>
+			{% } else if (upd_status == 'up_to_date') { %}<span class="g">{{ _('up to date') }}</span>
+			{% } else if (upd_status == 'updated') { %}<span class="g">{{ _('just updated') }}</span>
+			{% } else if (upd_status == 'newer_local') { %}<span class="y">{{ _('newer than release') }}</span>
+			{% } else { %}<span style="opacity:.6">{{ _('not checked') }}</span>{% } %}
+		</div>
+		<form method="post" action="{{ base }}" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+			<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+			<button class="cbi-button cbi-button-action" type="submit" name="act" value="check_update">{{ _('Check for updates') }}</button>
+			<button class="cbi-button cbi-button-apply" type="submit" name="act" value="do_update"
+				{% if (!upd_avail) { %}disabled title="{{ _('Check first; Update enables when a newer release exists') }}"{% } %}>{{ _('Update') }}</button>
+		</form>
+		<p style="font-size:12px;opacity:.6;margin:8px 0 0">{{ _('Downloads from GitHub releases (onebany/wrtg). Keeps /etc/wrtg/config and restarts the service.') }}</p>
 	</div>
 
 	<div class="wrtg-card">

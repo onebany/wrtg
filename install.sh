@@ -180,7 +180,7 @@ install_files() {
 	mkdir -p "$ETC" /usr/sbin /var/lib/wrtg
 	# mv-into-place: overwriting a running binary directly fails with ETXTBSY.
 	install_file 755 "$1" /usr/sbin/wrtg.new && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
-	for f in lib.sh setup-nft.sh update-cidr.sh; do
+	for f in lib.sh setup-nft.sh update-cidr.sh check-update.sh; do
 		install_file 755 "$PKG_DIR/$f" "$ETC/$f"
 	done
 	install_file 644 "$PKG_DIR/cidr-extra.txt" "$ETC/cidr-extra.txt"
@@ -283,7 +283,7 @@ install_remote() {
 		step "Uploading daemon to $ROUTER..."
 		ssh "$ROUTER" "mkdir -p $ETC /var/lib/wrtg"
 		scp -qO "$BIN" "$ROUTER:/usr/sbin/wrtg.new"
-		for f in lib.sh setup-nft.sh update-cidr.sh cidr-extra.txt cf-worker.js; do
+		for f in lib.sh setup-nft.sh update-cidr.sh check-update.sh cidr-extra.txt cf-worker.js; do
 			scp -qO "$PKG_DIR/$f" "$ROUTER:$ETC/$f"
 		done
 		# Seed dc-ips.txt only when missing (don't clobber admin edits).
