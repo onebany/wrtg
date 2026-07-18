@@ -1,18 +1,64 @@
 {#
- wrtg service control (start/stop/restart/reload) — redirect back to status
+ wrtg service control (start/stop/restart) + version check/update — redirect back to status
 -#}
 
 {%
+import { readfile, writefile, popen } from 'fs';
+
 let act = http.formvalue('act');
 let authorized = http.getenv('REQUEST_METHOD') == 'POST'
 	&& http.formvalue('token') == ctx.authtoken;
 
-if (authorized && act == 'start')
+let flash = '/tmp/wrtg-luci-flash';
+let check_cache = '/tmp/wrtg-update-status';
+
+function flash_msg(ok, text) {
+	writefile(flash, (ok ? '1' : '0') + '\n' + text + '\n');
+}
+
+if (authorized && act == 'start') {
 	system('/etc/init.d/wrtg start >/dev/null 2>&1');
-else if (authorized && act == 'stop')
+} else if (authorized && act == 'stop') {
 	system('/etc/init.d/wrtg stop >/dev/null 2>&1');
-else if (authorized && act == 'restart')
+} else if (authorized && act == 'restart') {
 	system('/etc/init.d/wrtg restart >/dev/null 2>&1');
+} else if (authorized && act == 'check_update') {
+	let out = trim(popen('/etc/wrtg/check-update.sh check 2>&1', 'r')?.read('all') ?? '');
+	if (length(out)) {
+		writefile(check_cache, out + '\n');
+		let avail = match(out, /AVAILABLE=1/);
+		if (avail)
+			flash_msg(true, _('Update available — see versions below, then click Update.'));
+		else if (match(out, /STATUS=up_to_date/))
+			flash_msg(true, _('Already up to date.'));
+		else if (match(out, /STATUS=newer_local/))
+			flash_msg(true, _('Installed version is newer than the latest GitHub release.'));
+		else
+			flash_msg(true, _('Version check finished.'));
+	} else {
+		flash_msg(false, _('Version check failed (empty response).'));
+	}
+} else if (authorized && act == 'do_update') {
+	// Only allow update when a prior check reported AVAILABLE=1, or force via form.
+	let cached = readfile(check_cache) ?? '';
+	let force = http.formvalue('force') == '1';
+	if (!force && !match(cached, /AVAILABLE=1/)) {
+		flash_msg(false, _('No update available. Click “Check for updates” first.'));
+	} else {
+		let out = trim(popen('/etc/wrtg/check-update.sh update 2>&1', 'r')?.read('all') ?? '');
+		if (match(out, /STATUS=updated/)) {
+			writefile(check_cache, out + '\n');
+			flash_msg(true, _('Update installed successfully. Service restarted; config preserved.'));
+		} else if (match(out, /STATUS=up_to_date/)) {
+			writefile(check_cache, out + '\n');
+			flash_msg(true, _('Already up to date — nothing to install.'));
+		} else {
+			flash_msg(false, length(out) ? out : _('Update failed.'));
+		}
+	}
+} else if (http.getenv('REQUEST_METHOD') == 'POST' && !authorized) {
+	flash_msg(false, _('Invalid request token.'));
+}
 
 http.redirect(dispatcher.build_url('admin', 'services', 'wrtg', 'status'));
 %}
