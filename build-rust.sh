@@ -28,7 +28,7 @@ if [ "$ARCH" = "mipsel" ]; then
 	echo "Building wrtg for $TARGET (nightly -Zbuild-std) -> $OUT"
 	export CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$MIPSEL_CC"
 	export CC_mipsel_unknown_linux_musl="$MIPSEL_CC"
-	export CFLAGS_mipsel_unknown_linux_musl="${MIPSEL_CFLAGS-default}"
+	export CFLAGS_mipsel_unknown_linux_musl="${MIPSEL_CFLAGS--march=mips32r2 -mtune=24kc}"
 	# panic=immediate-abort: stock OpenWrt has no libgcc_s.so.1, and the unwinder
 	# is the only hard consumer of it.
 	export RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort -Ctarget-cpu=mips32r2"
