@@ -86,6 +86,7 @@ let worker = readfile(workerpath) ?? '';
 	function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 	function inline(s){
 		s=esc(s);
+		s=s.replace(/!\[([^\]]*)\]\([^)]+\)/g,'$1'); /* images (badges): keep alt text */
 		s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
 		s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
 		s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" rel="noreferrer">$1</a>');
