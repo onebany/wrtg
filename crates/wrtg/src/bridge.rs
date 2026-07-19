@@ -35,10 +35,14 @@ use crate::ws::{
 use crate::ws_blacklist::ws_blacklisted;
 use crate::ws_pool::{acquire, schedule_refill};
 
-const WS_CHANNEL_CAP: usize = 256;
+const WS_CHANNEL_CAP: usize = 32;
 const WS_SEND_BATCH_MAX: usize = 32;
 const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CF_PROXY_ATTEMPTS: usize = 3;
+/// Grace period for the surviving bridge direction to flush data it has
+/// already read after the other direction ends — an instant abort would drop
+/// the tail of the session.
+const DRAIN_ON_CLOSE: Duration = Duration::from_secs(2);
 
 fn clear_ws_failure_state(hs: &HandshakeInfo, orig_ip: &str) {
     let target = ws_target_ip(hs.dc, orig_ip);
@@ -180,25 +184,22 @@ pub async fn bridge_ws(
     });
 
     let up_finished = tokio::select! {
-        _ = &mut up => {
-            down.abort();
-            true
-        },
-        _ = &mut down => {
-            up.abort();
-            false
-        },
+        _ = &mut up => true,
+        _ = &mut down => false,
     };
     drop(send_tx);
     drop(pong_tx);
+    // Let the surviving direction flush what it already read (with the WS
+    // drivers still alive to move it) before tearing everything down.
+    let other = if up_finished { &mut down } else { &mut up };
+    let drained = timeout(DRAIN_ON_CLOSE, &mut *other).await.is_ok();
     ping_driver.abort();
     ws_send_driver.abort();
     ws_recv_driver.abort();
-    if up_finished {
-        let _ = down.await;
-    } else {
-        let _ = up.await;
+    if !drained {
+        other.abort();
     }
+    let _ = other.await;
     let _ = ws_send_driver.await;
     let _ = ws_recv_driver.await;
     let _ = ping_driver.await;
@@ -245,20 +246,16 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
     });
 
     let up_finished = tokio::select! {
-        _ = &mut up => {
-            down.abort();
-            true
-        },
-        _ = &mut down => {
-            up.abort();
-            false
-        },
+        _ = &mut up => true,
+        _ = &mut down => false,
     };
-    if up_finished {
-        let _ = down.await;
-    } else {
-        let _ = up.await;
+    // Let the surviving direction flush what it already read before aborting
+    // it; an instant abort drops the tail of the session.
+    let other = if up_finished { &mut down } else { &mut up };
+    if timeout(DRAIN_ON_CLOSE, &mut *other).await.is_err() {
+        other.abort();
     }
+    let _ = other.await;
     log::info!("[{label}] TCP fallback session closed");
 }
 
@@ -779,6 +776,9 @@ async fn relay_via_worker(
         _ = &mut up => down.abort(),
         _ = &mut down => up.abort(),
     }
+    // The writer can be blocked in send_binary on a dead socket; abort it
+    // instead of awaiting it forever (same as the bridge_ws drivers).
+    writer.abort();
     let _ = writer.await;
     log::info!("[{label}] worker passthrough session closed");
     Ok(())
@@ -899,12 +899,20 @@ pub async fn blind_relay(
     });
     let targets = passthrough_targets(orig_ip, &host, orig_port);
 
+    // Never relay back into our own listener (direct, non-DNAT connects make
+    // SO_ORIGINAL_DST return the listener address) — that loops the daemon
+    // into itself until the connection semaphore is exhausted.
+    let self_addr = client.local_addr().ok();
+
     let mut tried = Vec::new();
     let mut remote = None;
     let mut dst = String::new();
 
     'outer: for ip in &targets {
         for port in &ports {
+            if is_self_target(self_addr, ip, *port) {
+                continue;
+            }
             dst = format!("{ip}:{port}");
             tried.push(dst.clone());
             if let Ok(Ok(r)) = timeout(Duration::from_secs(5), TcpStream::connect(&dst)).await {
@@ -1022,4 +1030,34 @@ pub fn should_skip_ws(dc: i32, is_media: bool, orig_ip: &str) -> bool {
     }
     let target = ws_target_ip(dc, orig_ip);
     should_skip_direct_ws(&target, dc)
+}
+
+/// True when `ip:port` is this connection's own listener socket (`local` is
+/// the accepted socket's local address). A direct, non-DNAT connect to the
+/// listener has SO_ORIGINAL_DST pointing right back at it; relaying to such a
+/// target would loop the daemon into itself.
+pub fn is_self_target(local: Option<std::net::SocketAddr>, ip: &str, port: u16) -> bool {
+    let Some(local) = local else {
+        return false;
+    };
+    port == local.port() && ip.parse::<std::net::IpAddr>().ok() == Some(local.ip())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn self_target_matches_listener_addr() {
+        let local: SocketAddr = "192.168.1.1:8443".parse().unwrap();
+        assert!(is_self_target(Some(local), "192.168.1.1", 8443));
+        // DNAT'd Telegram traffic: same listener socket, different dst.
+        assert!(!is_self_target(Some(local), "149.154.167.220", 443));
+        // Same IP, other port — not the listener.
+        assert!(!is_self_target(Some(local), "192.168.1.1", 443));
+        // No local addr / unparsable IP — can't be proven local, allow.
+        assert!(!is_self_target(None, "192.168.1.1", 8443));
+        assert!(!is_self_target(Some(local), "", 8443));
+    }
 }

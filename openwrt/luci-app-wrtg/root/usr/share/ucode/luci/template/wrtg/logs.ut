@@ -29,7 +29,7 @@ let url = dispatcher.build_url('admin', 'services', 'wrtg', 'logs');
 
 <div class="cbi-section">
 	<form method="get" action="{{ url }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-		<input type="text" name="q" value="{{ q }}" placeholder="{{ _('filter (e.g. DC1, CF worker, 302)') }}" style="width:24em" />
+		<input type="text" name="q" value="{{ entityencode(q) }}" placeholder="{{ _('filter (e.g. DC1, CF worker, 302)') }}" style="width:24em" />
 		<select name="n">
 			{% for (let opt in ['80','120','200','300','500']) { %}
 			<option value="{{ opt }}" {{ n == opt ? 'selected' : '' }}>{{ opt }} {{ _('lines') }}</option>

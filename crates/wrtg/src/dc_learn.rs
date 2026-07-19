@@ -63,8 +63,9 @@ fn parse_line(line: &str) -> Option<(String, i32, bool)> {
 }
 
 /// Load the admin-editable and persisted-learned files into the in-memory map.
-/// Call once at startup. The learned file wins over the manual file on conflict
-/// The admin file wins over learned data so operators can correct a mapping.
+/// Call once at startup. The learned file is loaded first, the admin file is
+/// applied on top — so the admin file wins on conflict and operators can
+/// correct a learned mapping.
 pub fn load() {
     let mut map = LEARNED.write().unwrap();
     map.clear();

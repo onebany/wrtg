@@ -127,6 +127,20 @@ render_config() {
 	' "$PKG_DIR/config.default"
 }
 
+# Values land in double quotes in /etc/wrtg/config, which is later sourced by
+# the shell — reject characters that could break out of the quoting.
+check_config_value() { # name value
+	case "$2" in
+		*[\"\\\`\$]*) die "invalid $1: must not contain double-quote, backslash, backtick or \$" ;;
+	esac
+}
+
+validate_config() {
+	check_config_value "FRONT_IP" "$CFG_FRONT_IP"
+	check_config_value "LAN_IF" "$CFG_LAN_IF"
+	check_config_value "CF_WORKER_DOMAIN" "$CFG_CF_WORKER"
+}
+
 build_binary() {
 	command -v cargo >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1 || \
 		die "Rust toolchain not found. Install it (https://rustup.rs) or use a release binary (SKIP_BUILD=1)."
@@ -350,6 +364,7 @@ REMOTE
 
 banner
 interactive_config
+validate_config
 if [ -n "$ROUTER" ]; then
 	install_remote
 else

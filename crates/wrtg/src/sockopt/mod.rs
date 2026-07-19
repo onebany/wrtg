@@ -1,5 +1,6 @@
-/// Read buffer for relay loops (client ↔ remote).
-pub const RELAY_BUF_SIZE: usize = 512 * 1024;
+/// Read buffer for relay loops (client ↔ remote). 128 KiB is ample for video
+/// chunking while keeping per-connection RAM bounded on the router.
+pub const RELAY_BUF_SIZE: usize = 128 * 1024;
 
 /// Target SO_RCVBUF / SO_SNDBUF for relay sockets (video-friendly).
 pub const TCP_BUF_SIZE: usize = 512 * 1024;
