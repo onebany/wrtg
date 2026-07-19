@@ -1,15 +1,21 @@
 # wrtg
 
-Прозрачный TCP-прокси Telegram для OpenWrt. nftables перенаправляет трафик к IP Telegram на локальный демон, который мостит MTProto через WebSocket и Cloudflare fallback. Клиентам прокси настраивать не нужно.
+**Прозрачный прокси Telegram для OpenWrt.** Роутер сам перенаправляет трафик Telegram через демон wrtg (WebSocket, Cloudflare fallback) — на телефонах и ПК в LAN ничего настраивать не нужно.
+
+[![Release](https://img.shields.io/github/v/release/onebany/wrtg)](https://github.com/onebany/wrtg/releases)
+[![License: MIT](https://img.shields.io/github/license/onebany/wrtg)](LICENSE)
+[![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
+[![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
 **Version:** 0.5.24 · **Last updated:** 2026-07-19
 
-История релизов — [`CHANGELOG.md`](CHANGELOG.md) · Релизы — [GitHub](https://github.com/onebany/wrtg/releases) · Исходник CF Worker — [`openwrt/cf-worker.js`](openwrt/cf-worker.js).
+[Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
 ---
 
 ## Оглавление
 
+- [Возможности](#возможности)
 - [Быстрый старт](#быстрый-старт)
 - [Установка](#установка)
 - [Настройка](#настройка)
@@ -19,7 +25,19 @@
 - [Ограничения](#ограничения)
 - [Как это работает](#как-это-работает) — архитектура, поток соединения, модули
 - [Глоссарий](#глоссарий)
-- [Проверки перед релизом (разработчикам)](#проверки-перед-релизом-разработчикам)
+- [Разработчикам](#разработчикам)
+
+---
+
+## Возможности
+
+- **Полная прозрачность** — nftables DNAT перехватывает TCP к IP Telegram (80/443/5222); клиенты ничего не знают о прокси.
+- **Умная fallback-цепочка** — direct WS pool → direct WS → TLS fronting → CF Worker → CF Proxy → TCP → blind relay, с blacklist/cooldown на каждом шаге.
+- **CF Worker** — обход HTTP 302 на DC1/DC3/DC5 и туннель media/CDN; свой Worker на бесплатном плане Cloudflare.
+- **Self-learning** — демон сам запоминает, какой IP к какому DC относится (`dc_learn`).
+- **LuCI-приложение** — статус, настройки, логи, документация и обновление в один клик из веб-интерфейса роутера.
+- **Один статический бинарник** (~3 МБ, ~4 МБ RAM), без зависимостей: `x86_64`, `aarch64`, `armv7`, `mipsel` (MT7621, напр. Xiaomi Mi Router 3G).
+- **Безопасность по умолчанию** — проверка sha256 при установке, токен на Worker, лимиты соединений и таймауты против DoS.
 
 ---
 
@@ -40,18 +58,19 @@ wrtg --check          # DNS + WSS probes; exit 0 = OK
 
 Откройте Telegram в LAN — в логах (`logread -e wrtg`) появится `direct handshake OK` или `WS connected`. Клиентам ничего настраивать не нужно.
 
-Если DC1/DC3/DC5 отвечают HTTP 302 на direct WS (частая ситуация) — настройте [CF Worker](#cf-worker).
+Если DC1/DC3/DC5 отвечают HTTP 302 на direct WS (частая ситуация) — настройте [CF Worker](#cf-worker), это 5 минут.
 
 ---
 
 ## Установка
 
+### Стандартная (GitHub)
+
 ```sh
 wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 ```
 
-`bootstrap.sh` скачивает релиз и запускает `install.sh` (бинарник, конфиг, nft, cron, LuCI).  
-Релизы: [GitHub](https://github.com/onebany/wrtg/releases).
+`bootstrap.sh` скачивает релиз, проверяет sha256 и запускает `install.sh` (бинарник, конфиг, nft, cron, LuCI).
 
 Поддерживаемые CPU: `x86_64`, `aarch64`, `armv7`, `mipsel` (mips32r2, напр. MT7621 — Xiaomi Mi Router 3G). Big-endian MIPS не поддерживается.
 
@@ -80,7 +99,20 @@ SKIP_BUILD=1 sh wrtg/install.sh
 
 Это тот же бандл и тот же `install.sh`, что запускает `bootstrap.sh`, — с той же проверкой sha256.
 
-После установки:
+### Обновление
+
+- **LuCI**: Services → wrtg → Status → **Check for updates / Update**.
+- **CLI**: `/etc/wrtg/check-update.sh update` или просто повторить команду установки.
+
+Конфиг и learned DC-карта при обновлении сохраняются.
+
+### Удаление
+
+```sh
+sh uninstall.sh        # или FORCE=1 sh uninstall.sh
+```
+
+### После установки
 
 ```sh
 /etc/init.d/wrtg status
@@ -89,13 +121,11 @@ wrtg --check
 
 **LuCI** (если не `SKIP_LUCI=1`): **Services → wrtg** — Status (service-контролы, live-статус, **Check for updates / Update** с GitHub releases), Settings (quick-set + Save & Reload, DC→IP learning, `--check`, raw config), Logs (фильтр-чипы), Documentation (рендер `/etc/wrtg/README.md`). CLI того же пути: `/etc/wrtg/check-update.sh check|update`.
 
-Удаление: `sh uninstall.sh` (или `FORCE=1 sh uninstall.sh`).
-
 ---
 
 ## Настройка
 
-Файл `/etc/wrtg/config`. Front/домены/DC-learn применяются вживую: **`/etc/init.d/wrtg reload`** (SIGHUP, без разрыва сессий). Полный **`restart`** нужен только для `LISTEN`/nftables.  
+Файл `/etc/wrtg/config`. Front/домены/DC-learn применяются вживую: **`/etc/init.d/wrtg reload`** (SIGHUP, без разрыва сессий). Полный **`restart`** нужен только для `LISTEN`/nftables.
 Только CIDR/nft: `/etc/wrtg/update-cidr.sh`.
 
 ### Основное
@@ -197,7 +227,7 @@ CF Worker — основной fallback для DC с HTTP 302 (DC1/DC3/DC5) и m
 ### Развёртывание
 
 1. [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create Worker**.
-2. **Edit code** → вставьте содержимое `openwrt/cf-worker.js` → **Deploy**.
+2. **Edit code** → вставьте содержимое `openwrt/cf-worker.js` → **Deploy**. В LuCI (Services → wrtg → Documentation) код воркера показан с кнопкой копирования.
 3. **Settings → Variables and Secrets** → encrypted secret `WRTG_TOKEN=<random>` (`openssl rand -hex 32`). Не пропускайте этот шаг — без токена Worker открыт для всех.
 4. Скопируйте hostname `name.username.workers.dev`.
 5. На роутере:
@@ -290,6 +320,7 @@ logread -e wrtg | grep -i 'CF proxy'
 | HTTP 302 на WS | Настройте `CF_WORKER_DOMAIN` |
 | Media/CDN не грузятся | Worker passthrough (`CF_WORKER_DOMAIN`, не `WRTG_NO_WORKER_PASSTHROUGH`) |
 | Медленный fallback | Отключите `WRTG_CFPROXY_AUTO`, используйте свой Worker |
+| `curl: (28)` при установке | DPI провайдера дропает GitHub — [офлайн-установка](#офлайн-установка-github-недоступен-с-роутера) |
 
 ---
 
@@ -394,7 +425,9 @@ flowchart TD
 
 ---
 
-## Проверки перед релизом (разработчикам)
+## Разработчикам
+
+Проверки перед релизом:
 
 ```sh
 make bundle
@@ -406,3 +439,11 @@ shellcheck -x install.sh bootstrap.sh uninstall.sh build-rust.sh \
 sh build-rust.sh amd64
 node --check openwrt/cf-worker.js
 ```
+
+CI: `.github/workflows/build.yml` — тесты и сборка под все архитектуры; `release.yml` — релиз по тегу `v*` (бинарники, бандл, sha256, sync версии в README).
+
+---
+
+## Лицензия
+
+[MIT](LICENSE) · сделано с Rust и nftables
