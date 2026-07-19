@@ -112,7 +112,11 @@ FRONT_IP="149.154.167.220"
 # Max simultaneously-served connections (backpressure cap; 0/unset -> 1024)
 # WRTG_MAX_CONNS="1024"
 
-# Alternative front IP env names (CLI --front-ip takes precedence over all):
+# Alternative front IP env names. Only useful when running the binary manually
+# without the init script: init always passes `-front-ip "$FRONT_IP"`, and the
+# CLI flag wins over these. (SIGHUP reload DOES read them from this file, so
+# setting them here changes front IP on reload but not on restart — prefer
+# FRONT_IP at the top of this file.)
 # WRTG_FRONT_IP="149.154.167.220"
 # TG_TPROXY_FRONT_IP="149.154.167.220"
 

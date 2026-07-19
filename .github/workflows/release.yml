@@ -167,3 +167,33 @@ jobs:
               "$GITEA_API/releases/$rid/assets?name=$name" >/dev/null
             echo "uploaded $name to Gitea release $TAG"
           done
+
+  # Keep the "**Version:** X · **Last updated:** Y" line in README.md in sync
+  # with the release tag, so it never goes stale. Commits back to main.
+  sync-readme:
+    name: Sync README version line
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Update version line from tag
+        run: |
+          VER="${GITHUB_REF#refs/tags/v}"
+          DATE="$(date +%F)"
+          sed -i -E "s|^\*\*Version:\*\* [0-9.]+ · \*\*Last updated:\*\* [0-9-]+|**Version:** ${VER} · **Last updated:** ${DATE}|" README.md
+          grep -F "**Version:** ${VER}" README.md
+
+      - name: Commit back to main
+        run: |
+          if git diff --quiet README.md; then
+            echo "README already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: sync README version to ${GITHUB_REF#refs/tags/v} [skip ci]"
+          git push origin main
