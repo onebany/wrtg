@@ -98,9 +98,42 @@ jobs:
           name: ${{ matrix.out }}
           path: dist/${{ matrix.out }}
 
+  # mipsel (MT7621/24kc, mips32r2) is a tier-3 Rust target: nightly -Zbuild-std
+  # with the musl.cc cross-gcc instead of cargo-zigbuild.
+  build-mipsel:
+    name: build wrtg-linux-mipsel
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mipsel-unknown-linux-musl
+
+      - name: Install mipsel cross toolchain
+        run: |
+          curl -fsSL https://musl.cc/mipsel-linux-musl-cross.tgz | sudo tar -xz -C /opt
+          echo "/opt/mipsel-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          sudo apt-get update -qq && sudo apt-get install -y patchelf
+
+      - name: Build binary (mips32r2, musl)
+        run: |
+          sh build-rust.sh mipsel
+          file dist/wrtg-linux-mipsel
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wrtg-linux-mipsel
+          path: dist/wrtg-linux-mipsel
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-mipsel]
     runs-on: ubuntu-latest
     env:
       # Optional: to also mirror the release to a self-hosted Gitea, set BOTH the
@@ -122,7 +155,7 @@ jobs:
           # + install.sh, so the router can install with no git/Rust (SKIP_BUILD=1).
           mkdir -p bundle/wrtg/dist
           cp -r install.sh bootstrap.sh build-rust.sh VERSION README.md openwrt bundle/wrtg/
-          cp dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm bundle/wrtg/dist/
+          cp dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm dist/wrtg-linux-mipsel bundle/wrtg/dist/
           tar -czf dist/wrtg-openwrt.tar.gz -C bundle wrtg
 
       - name: Generate checksums
@@ -137,6 +170,7 @@ jobs:
             dist/wrtg-linux-amd64
             dist/wrtg-linux-arm64
             dist/wrtg-linux-arm
+            dist/wrtg-linux-mipsel
             dist/wrtg-openwrt.tar.gz
             bootstrap.sh
             dist/SHA256SUMS
