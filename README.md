@@ -57,6 +57,29 @@ wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 
 Опции через env: `VER=v0.5.22`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
 
+### Офлайн-установка (GitHub недоступен с роутера)
+
+Некоторые провайдеры DPI-фильтруют хосты раздачи релизов GitHub (`release-assets.githubusercontent.com`): коннекты случайно дропаются, и даже ретраи не помогают. В этом случае бандл можно принести на роутер вручную.
+
+На машине, где GitHub доступен:
+
+```sh
+wget https://github.com/onebany/wrtg/releases/latest/download/wrtg-openwrt.tar.gz
+wget https://github.com/onebany/wrtg/releases/latest/download/SHA256SUMS
+tar -czf - wrtg-openwrt.tar.gz SHA256SUMS | ssh root@<роутер> 'tar -xzf - -C /tmp'
+```
+
+На роутере:
+
+```sh
+cd /tmp
+grep wrtg-openwrt.tar.gz SHA256SUMS | sha256sum -c -   # должно быть: OK
+tar -xzf wrtg-openwrt.tar.gz
+SKIP_BUILD=1 sh wrtg/install.sh
+```
+
+Это тот же бандл и тот же `install.sh`, что запускает `bootstrap.sh`, — с той же проверкой sha256.
+
 После установки:
 
 ```sh
