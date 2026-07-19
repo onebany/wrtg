@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.24 - 2026-07-19
+
+### Added
+- **mipsel support (mips32r2, e.g. MT7621)** — new `wrtg-linux-mipsel` release binary for little-endian 32-bit MIPS routers (Xiaomi Mi Router 3G and similar). Tier-3 Rust target: built with nightly `-Zbuild-std`, `panic=immediate-abort` and a mips32r2 musl cross-gcc; the spurious `libgcc_s.so.1` DT_NEEDED (absent on stock OpenWrt) is stripped with patchelf — only weak crtbegin frame refs pointed into it. `install.sh`/`bootstrap.sh` detect endianness via the ELF EI_DATA byte (uname reports `mips` on both endians); big-endian MIPS stays unsupported. Fixes #6.
+- **README version auto-sync** — the release workflow rewrites the `Version / Last updated` line in README.md from the tag and commits it back to main.
+- **LuCI docs: CF Worker copy widget** — the Documentation page shows the actual `/etc/wrtg/cf-worker.js` source in a collapsible block with a copy-to-clipboard button and a WRTG_TOKEN hint.
+
+### Fixed
+- **Docs vs code drift** — README gained `--version` and `WRTG_MAX_CONNS`; the outdated env advice for `wrtg --check` was removed; `config.default` now warns that `WRTG_FRONT_IP`/`TG_TPROXY_FRONT_IP` only apply on manual runs (init's `-front-ip` wins; SIGHUP reload reads them, restart does not).
+
 ## 0.5.23 - 2026-07-19
 
 ### Fixed

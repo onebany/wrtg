@@ -10,8 +10,44 @@ case "$ARCH" in
 	amd64|x86_64) TARGET=x86_64-unknown-linux-musl; OUT="$DIST/wrtg-linux-amd64" ;;
 	arm64|aarch64) TARGET=aarch64-unknown-linux-musl; OUT="$DIST/wrtg-linux-arm64" ;;
 	arm|armv7) TARGET=armv7-unknown-linux-musleabihf; OUT="$DIST/wrtg-linux-arm" ;;
+	mipsel) TARGET=mipsel-unknown-linux-musl; OUT="$DIST/wrtg-linux-mipsel" ;;
 	*) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
+
+# mipsel (e.g. MT7621/24kc, mips32r2) is a tier-3 Rust target: no prebuilt std,
+# so it needs nightly + -Zbuild-std and a mipsel musl cross-gcc (musl.cc).
+if [ "$ARCH" = "mipsel" ]; then
+	MIPSEL_CC="${MIPSEL_CC:-mipsel-linux-musl-gcc}"
+	PATCHELF="${PATCHELF:-patchelf}"
+	command -v "$MIPSEL_CC" >/dev/null 2>&1 || {
+		echo "mipsel cross-compiler not found: $MIPSEL_CC" >&2
+		echo "install https://musl.cc/mipsel-linux-musl-cross.tgz or set MIPSEL_CC" >&2
+		exit 1
+	}
+	command -v "$PATCHELF" >/dev/null 2>&1 || {
+		echo "patchelf not found: $PATCHELF (apt install patchelf, or set PATCHELF)" >&2
+		exit 1
+	}
+	mkdir -p "$DIST"
+	echo "Building wrtg for $TARGET (nightly -Zbuild-std) -> $OUT"
+	export CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$MIPSEL_CC"
+	export CC_mipsel_unknown_linux_musl="$MIPSEL_CC"
+	export CFLAGS_mipsel_unknown_linux_musl="-march=mips32r2 -mtune=24kc"
+	# panic=immediate-abort: stock OpenWrt has no libgcc_s.so.1, and the unwinder
+	# is the only hard consumer of it.
+	export RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort -Ctarget-cpu=mips32r2"
+	(
+		cd "$ROOT"
+		cargo +nightly build -Zbuild-std --release -p wrtg --target "$TARGET"
+	)
+	cp "$ROOT/target/$TARGET/release/wrtg" "$OUT"
+	# crtbegin's weak __register_frame_info@GLIBC_2.0 refs make ld keep a spurious
+	# DT_NEEDED on libgcc_s.so.1; no strong symbols from it are used (verified).
+	"$PATCHELF" --remove-needed libgcc_s.so.1 "$OUT"
+	chmod +x "$OUT"
+	echo "Built $OUT"
+	exit 0
+fi
 
 if ! command -v rustup >/dev/null 2>&1; then
 	echo "rustup not found; install Rust: https://rustup.rs" >&2

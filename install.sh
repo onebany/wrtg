@@ -83,6 +83,12 @@ detect_arch() {
 		x86_64|amd64) echo amd64 ;;
 		aarch64|arm64) echo arm64 ;;
 		armv7l|armv7|armv6l) echo arm ;;
+		mips|mips64)
+			# uts machine is "mips" on both endians; read EI_DATA (byte 5)
+			# of any system ELF: 01 = little-endian (mipsel), 02 = big.
+			_ei="$(head -c6 /bin/busybox 2>/dev/null | tail -c1 | od -An -tx1 | tr -d ' \n')"
+			[ "$_ei" = "01" ] && echo mipsel && return 0
+			return 1 ;;
 		*) return 1 ;;
 	esac
 }
