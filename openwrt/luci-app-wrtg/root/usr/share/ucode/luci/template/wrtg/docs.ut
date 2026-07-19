@@ -7,15 +7,59 @@
 import { readfile } from 'fs';
 
 const filepath = '/etc/wrtg/README.md';
+const workerpath = '/etc/wrtg/cf-worker.js';
 
 let content = readfile(filepath);
 if (!content)
 	content = _('Document not found. Re-run install.sh to deploy documentation.');
+
+let worker = readfile(workerpath) ?? '';
 %}
 
 {% include('header') %}
 
 <h2>{{ _('wrtg Documentation') }}</h2>
+
+{% if (length(worker)) { %}
+<style>
+.wrtg-worker { max-width:920px; margin:0 0 1.2em; padding:10px 14px; border:1px solid var(--border-color-medium,#444); border-radius:6px; }
+.wrtg-worker summary { cursor:pointer; font-weight:bold; }
+.wrtg-worker pre { background:var(--background-color-high,#1e1e1e); border:1px solid var(--border-color-medium,#444); border-radius:6px; padding:10px 12px; overflow-x:auto; max-height:26em; overflow-y:auto; font-size:.85em; }
+.wrtg-worker .copy-btn { margin:.5em 0; }
+.wrtg-worker .copy-ok { color:#6c6; margin-left:.6em; display:none; }
+</style>
+
+<div class="wrtg-worker">
+	<strong>{{ _('CF Worker — код для Cloudflare') }}</strong>
+	<p style="margin:.4em 0">{{ _('При создании Worker в Cloudflare Dashboard (Workers & Pages → Create → Worker → Edit code) замените содержимое редактора на этот файл. Затем добавьте секрет WRTG_TOKEN (Settings → Variables and Secrets) и укажите домен воркера в конфиге wrtg.') }}</p>
+	<details id="wrtg-worker-details">
+		<summary>{{ _('Показать код воркера (cf-worker.js)') }}</summary>
+		<pre id="wrtg-worker-code">{{ entityencode(worker) }}</pre>
+	</details>
+	<button type="button" class="btn cbi-button cbi-button-action copy-btn" id="wrtg-worker-copy">{{ _('Скопировать код воркера') }}</button><span class="copy-ok" id="wrtg-worker-copied">{{ _('Скопировано!') }}</span>
+</div>
+
+<script>
+(function(){
+	var btn=document.getElementById('wrtg-worker-copy');
+	var ok=document.getElementById('wrtg-worker-copied');
+	btn.addEventListener('click',function(){
+		var text=document.getElementById('wrtg-worker-code').textContent;
+		function done(){ ok.style.display='inline'; setTimeout(function(){ ok.style.display='none'; },2500); }
+		if(navigator.clipboard && navigator.clipboard.writeText){
+			navigator.clipboard.writeText(text).then(done,function(){ fallback(); });
+		}else{ fallback(); }
+		function fallback(){
+			var ta=document.createElement('textarea');
+			ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+			document.body.appendChild(ta); ta.select();
+			try{ document.execCommand('copy'); done(); }catch(e){ document.getElementById('wrtg-worker-details').open=true; }
+			document.body.removeChild(ta);
+		}
+	});
+})();
+</script>
+{% } %}
 
 <style>
 .wrtg-doc { max-width:920px; line-height:1.55; }
