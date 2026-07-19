@@ -99,7 +99,7 @@ jobs:
           path: dist/${{ matrix.out }}
 
   # mipsel (MT7621/24kc, mips32r2) is a tier-3 Rust target: nightly -Zbuild-std
-  # with zig cc as the cross C compiler (musl.cc is unreliable from CI).
+  # with the musl.cc cross-gcc (mirrored as a release asset) instead of cargo-zigbuild.
   build-mipsel:
     name: build wrtg-linux-mipsel
     needs: test
@@ -115,29 +115,21 @@ jobs:
         with:
           key: mipsel-unknown-linux-musl
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          # Pin 0.14.x: zig 0.16 dropped musl libc support for mipsel
-          version: 0.14.1
+      - name: Install mipsel cross toolchain
+        run: |
+          # zig cc ships no musl headers for mipsel and musl.cc is unreachable
+          # from GH runners, so the proven musl.cc gcc toolchain is mirrored
+          # as a release asset (built once from https://musl.cc/).
+          curl -fL --retry 3 -o /tmp/mipsel-cross.tgz \
+            https://github.com/onebany/wrtg/releases/download/v0.5.23/mipsel-linux-musl-cross.tgz
+          echo "82626533bf7e677c225e7cbedf1d5b0d6bc60c3daaf28249e54f0eb805d89b13  /tmp/mipsel-cross.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/mipsel-cross.tgz -C /opt
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf
+          /opt/mipsel-linux-musl-cross/bin/mipsel-linux-musl-gcc --version
 
       - name: Build binary (mips32r2, musl)
         run: |
-          # zig cc wrapper as the mipsel cross C compiler. The cc crate passes
-          # --target=mipsel-unknown-linux-musl (LLVM triple), which zig cc does
-          # not parse, so the wrapper strips it and supplies the zig target.
-          cat > /tmp/mipsel-zig-cc <<'EOF'
-          #!/bin/sh
-          args=
-          for a in "$@"; do
-            case "$a" in
-              --target=*) ;;
-              *) args="$args '$a'" ;;
-            esac
-          done
-          eval "exec zig cc -target mipsel-linux-musl -mcpu=mips32r2 $args"
-          EOF
-          chmod +x /tmp/mipsel-zig-cc
-          MIPSEL_CC=/tmp/mipsel-zig-cc MIPSEL_CFLAGS= sh build-rust.sh mipsel
+          PATH="/opt/mipsel-linux-musl-cross/bin:$PATH" sh build-rust.sh mipsel
           file dist/wrtg-linux-mipsel
 
       - uses: actions/upload-artifact@v7
