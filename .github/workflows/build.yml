@@ -118,6 +118,9 @@ jobs:
           key: mipsel-unknown-linux-musl
 
       - uses: mlugg/setup-zig@v2
+        with:
+          # Pin 0.14.x: zig 0.16 dropped musl libc support for mipsel
+          version: 0.14.1
 
       - name: Build binary (mips32r2, musl)
         run: |
