@@ -9,7 +9,6 @@ use crate::cf_proxy_cooldown::{
     cf_proxy_cooldown_remaining, clear_cf_proxy_429_cooldown, mark_cf_proxy_429_cooldown,
 };
 use crate::cf_proxy_doh::resolve_doh;
-use crate::mtproto::ws_domains;
 use crate::ws::{connect_ws_with_headers, is_ws_http_status, RawWebSocket, WsConnectError};
 
 pub fn cf_proxy_ws_domain(cf_domain: &str, dc: i32, is_media: bool) -> String {
@@ -36,7 +35,8 @@ static CFPROXY_SEM: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(cf_proxy_parallel_limit())));
 
 /// Connect via a Cloudflare-proxied domain (TLS to CF, CF forwards to Telegram).
-/// On hostname dial failure, resolves the base domain via DoH and retries with IP + SNI.
+/// On a transport failure (DNS/connect/timeout), resolves the base domain via
+/// DoH and retries with IP + SNI.
 pub async fn connect_cf_proxy_ws(
     cf_domain: &str,
     dc: i32,
@@ -65,6 +65,12 @@ async fn cf_connect_domain(
         Ok(ws) => Ok(ws),
         Err(e) if is_ws_http_status(&e, 429) => Err(e),
         Err(host_err) => {
+            // DoH retry only helps transport failures (DNS/connect/timeout).
+            // A TLS failure or an HTTP response status won't change with a
+            // different dial IP — don't retry those.
+            if !matches!(host_err, WsConnectError::Io(_) | WsConnectError::Timeout) {
+                return Err(host_err);
+            }
             let resolved_ip = resolve_doh(dial_host).await.unwrap_or_default();
             if resolved_ip.is_empty() {
                 log::debug!("CF proxy DoH {dial_host}: no result");
@@ -81,13 +87,6 @@ async fn cf_connect_domain(
             .await
         }
     }
-}
-
-pub fn cf_proxy_domains_for_dc(dc: i32, is_media: bool, cf_domain: &str) -> Vec<String> {
-    if !cf_domain.is_empty() {
-        return vec![cf_proxy_ws_domain(cf_domain, dc, is_media)];
-    }
-    ws_domains(dc, is_media)
 }
 
 /// Try one CF proxy base domain (429 cooldown + parallel slot + DoH fallback).
@@ -127,10 +126,6 @@ pub async fn try_cf_proxy_domain(
         }
         Err(e) => Err(e),
     }
-}
-
-pub fn cf_proxy_parallel() -> usize {
-    cf_proxy_parallel_limit()
 }
 
 #[cfg(test)]

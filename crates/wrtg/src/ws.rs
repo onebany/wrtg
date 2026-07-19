@@ -23,6 +23,9 @@ pub struct WsHandshakeError {
 #[derive(Debug)]
 pub enum WsConnectError {
     Io(std::io::Error),
+    /// TLS handshake failure — kept apart from transport I/O so callers don't
+    /// mistake it for a dial/DNS problem (a DoH retry would not fix it).
+    Tls(std::io::Error),
     Handshake(WsHandshakeError),
     Timeout,
 }
@@ -37,7 +40,7 @@ impl WsConnectError {
 
     pub fn into_io(self) -> std::io::Error {
         match self {
-            Self::Io(e) => e,
+            Self::Io(e) | Self::Tls(e) => e,
             Self::Timeout => std::io::Error::new(std::io::ErrorKind::TimedOut, "WebSocket timeout"),
             Self::Handshake(h) => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -151,7 +154,7 @@ async fn connect_ws_inner(
         .map_err(|e| WsConnectError::Io(std::io::Error::other(e)))?;
     let mut stream = match timeout(connect_timeout, connector.connect(server_name, tcp)).await {
         Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err(WsConnectError::Io(e)),
+        Ok(Err(e)) => return Err(WsConnectError::Tls(e)),
         Err(_) => return Err(WsConnectError::Timeout),
     };
 
@@ -400,29 +403,6 @@ impl RawWebSocket {
             self.send(p).await?;
         }
         Ok(())
-    }
-
-    pub async fn recv(&mut self) -> std::io::Result<Option<Vec<u8>>> {
-        let mut fragmented = None;
-        loop {
-            let (fin, opcode, payload) = read_frame(&mut self.stream).await?;
-            match opcode {
-                0x8 => return Ok(None),
-                0x9 => {
-                    let pong = build_ws_frame(0xA, &payload, true);
-                    self.stream.write_all(&pong).await?;
-                }
-                0xA => {}
-                0x0..=0x2 => {
-                    if let Some(message) =
-                        assemble_data_message(fin, opcode, payload, &mut fragmented)?
-                    {
-                        return Ok(Some(message));
-                    }
-                }
-                _ => return Err(ws_protocol_error("unsupported WebSocket opcode")),
-            }
-        }
     }
 
     pub async fn close(&mut self) {

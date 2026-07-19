@@ -56,11 +56,12 @@ calls_zapret_bypass_apply() {
 	[ -n "$elements" ] || return 1
 	nft add set inet zapret2 tg_calls_cidr '{ type ipv4_addr; flags interval; }'
 	nft add element inet zapret2 tg_calls_cidr "{ $elements }"
-	nft insert rule inet zapret2 postnat_hook position 0 \
+	# insert (no position) prepends: the return must precede zapret nfqueue rules.
+	nft insert rule inet zapret2 postnat_hook \
 		oifname @wanif meta nfproto ipv4 ip daddr @tg_calls_cidr \
 		udp dport '{ 3478, 596-599, 50000-65535 }' return \
 		comment \"$CALLS_NFT_COMMENT\"
-	nft insert rule inet zapret2 prenat_hook position 0 \
+	nft insert rule inet zapret2 prenat_hook \
 		iifname @wanif meta nfproto ipv4 ip saddr @tg_calls_cidr \
 		udp sport '{ 3478, 596-599, 50000-65535 }' return \
 		comment \"$CALLS_NFT_COMMENT\"

@@ -11,6 +11,9 @@
 #   WRTG_REPO=o/r     GitHub repo to install from (default: onebany/wrtg)
 #   WRTG_BASE_URL=    Install from a self-hosted Gitea host instead of GitHub
 #                     (Gitea-style API; alias: WRTG_RELEASE_URL)
+#   WRTG_INSECURE=1   Allow unverified installs: downgrade a missing sha256sum
+#                     tool / SHA256SUMS to a warning AND permit the unverified
+#                     binary+source fallback (not recommended)
 #   ASSUME_YES=1      Non-interactive (accept config defaults)
 #   plus any install.sh option: SKIP_LUCI=1, FRONT_IP=, CF_WORKER_DOMAIN=, ...
 
@@ -20,7 +23,8 @@ BASE="${WRTG_BASE_URL:-${WRTG_RELEASE_URL:-}}"
 WRTG_REPO="${WRTG_REPO:-onebany/wrtg}"
 VER="${VER:-latest}"
 BUNDLE="wrtg-openwrt.tar.gz"
-TMP="/tmp/wrtg-install"
+TMP="$(mktemp -d /tmp/wrtg-install.XXXXXX)" || { echo "wrtg: mktemp failed" >&2; exit 1; }
+trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 # Checksum verification is fail-closed. Set WRTG_INSECURE=1 to downgrade a
 # missing sha256sum tool / missing SHA256SUMS to a warning (not recommended).
 INSECURE="${WRTG_INSECURE:-0}"
@@ -29,14 +33,14 @@ err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
 
 fetch() { # url dest
-	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
 	else err "need curl or wget"; fi
 }
 
 fetch_optional() { # url dest — returns 0 on success, 1 on 404/missing
-	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
 	else return 1; fi
 }
 
@@ -216,7 +220,6 @@ install_from_binary() { # ver
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
-rm -rf "$TMP"
 mkdir -p "$TMP"
 
 if [ "$VER" = "latest" ]; then
@@ -234,7 +237,10 @@ fi
 if install_from_bundle "$VER"; then
 	:
 else
-	warn "release bundle unavailable — falling back to binary + source"
+	# The fallback runs install.sh from an unverified source archive as root
+	# (only the binary is sha256-verified). Require an explicit opt-in.
+	[ "$INSECURE" = "1" ] || err "release bundle unavailable — refusing unverified source fallback (set WRTG_INSECURE=1 to override)"
+	warn "release bundle unavailable — falling back to UNVERIFIED binary + source (WRTG_INSECURE=1)"
 	install_from_binary "$VER"
 fi
 

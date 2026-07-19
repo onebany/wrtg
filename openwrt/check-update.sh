@@ -14,7 +14,8 @@ set -e
 WRTG_REPO="${WRTG_REPO:-onebany/wrtg}"
 VERSION_FILE="${WRTG_VERSION_FILE:-/etc/wrtg/version}"
 BUNDLE="wrtg-openwrt.tar.gz"
-TMP="/tmp/wrtg-update"
+TMP="$(mktemp -d /tmp/wrtg-update.XXXXXX)" || { echo "wrtg: mktemp failed" >&2; exit 1; }
+trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 INSECURE="${WRTG_INSECURE:-0}"
 CMD="${1:-check}"
 REQ_VER="${2:-}"
@@ -23,14 +24,14 @@ err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
 
 fetch() {
-	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
 	else err "need curl or wget"; fi
 }
 
 fetch_optional() {
-	if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
 	else return 1; fi
 }
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.23 - 2026-07-19
+
+### Fixed
+- **Self-connect DoS** — a direct connection to the listen port (no DNAT, e.g. a LAN port scan) made `SO_ORIGINAL_DST` return the listener's own address, so `blind_relay` chained relays onto itself until the connection semaphore was exhausted and the proxy wedged until restart. Such connections are now dropped (logged once), and self-targets are filtered out of `blind_relay` candidates. Regression test added.
+- **Slowloris on handshake classification** — the 750 ms timeout was per-read, so a client dribbling 1 byte/700 ms held a connection slot for ~45 minutes. The init phase now has a 10 s total deadline (also applied to the HTTP request reader).
+- **Writer task hang in worker passthrough** — after aborting the up/down tasks, `writer.await` could block forever on an undrained socket, leaking a task per session. The writer is now aborted as in `bridge_ws`.
+- **Tail data loss on client close** — `bridge_ws`/`bridge_tcp` aborted the surviving direction instantly on EOF, dropping already-received-but-unwritten frames. The survivor now gets a 2 s drain window before abort.
+- **Handshake loss in error branches** — `handle_conn` error paths for `generate_relay_init`/`CryptoCtx::build_direct` called `blind_relay` with an empty prefix instead of the already-read handshake bytes.
+- **DoH retry on any error** — `connect_cf_proxy_ws` retried via DoH on *every* failure (including TLS cert errors and HTTP statuses), doubling delays on dead domains. Retry now happens only on transport errors (DNS/connect/timeout).
+- **Silent init errors** — unknown CLI arguments exited with code 0; they now exit 2. Added `--version`.
+- **Log spam** — the per-connection `tls passthrough` WARN with a ClientHello hex dump (which flooded the 128 KB syslog ring in minutes) is now DEBUG.
+- **check-update hangs** — all fetches in `check-update.sh`/`bootstrap.sh` now have 15 s timeouts; temp dirs use `mktemp -d`.
+- **LuCI reflected XSS** — the log filter parameter `q` was rendered unescaped; now passed through `entityencode`.
+- **bootstrap fallback without verification** — running `install.sh` from the unverified `src.tar.gz` fallback now requires an explicit `WRTG_INSECURE=1`.
+- **Config injection** — `install.sh` rejects config values containing `"` `\` `` ` `` `$`; `lib.sh` validates every interface name in `LAN_IF` before it lands in nft `iifname` expressions.
+- **setup-nft multi-interface** — `LAN_IF` lists (e.g. `br-lan wt0 br-guest`) now emit one DNAT rule per interface instead of an invalid single `iifname` with several names.
+- **zapret calls script** — removed invalid `position 0` from `nft insert` (the rule is inserted at chain start anyway), so `set -e` no longer aborts the apply halfway on nft versions that reject it.
+
+### Changed
+- **Lower memory per connection** — relay read buffers 512→128 KiB and the WS channel capacity 256→32; backpressure instead of buffering on stalled clients.
+- **Dead code removed** — `tcp_target_ip`, `cf_proxy_domains_for_dc`, `cf_proxy_parallel`, `RawWebSocket::recv`.
+
 ## 0.5.22 - 2026-07-18
 
 ### Added

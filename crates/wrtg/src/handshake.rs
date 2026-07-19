@@ -10,6 +10,11 @@ use tokio::time::timeout;
 use crate::mtproto::{parse_direct_handshake, HandshakeInfo, HANDSHAKE_LEN};
 
 const INIT_READ_MAX: usize = 4096;
+/// Per-read wait while classifying the client init.
+const INIT_READ_STEP: Duration = Duration::from_millis(750);
+/// Total budget for the whole init-read phase, so a client trickling one byte
+/// per step can't hold a connection slot for ages.
+const INIT_READ_TOTAL: Duration = Duration::from_secs(10);
 
 pub struct ParsedInit {
     pub info: HandshakeInfo,
@@ -95,9 +100,14 @@ async fn read_init_buffer(
 ) -> Result<Option<ParsedInit>, (TcpStream, Vec<u8>, String)> {
     let mut buf = vec![0u8; INIT_READ_MAX];
     let mut n = 0usize;
+    let deadline = tokio::time::Instant::now() + INIT_READ_TOTAL;
 
     while n < buf.len() {
-        let chunk = timeout(Duration::from_millis(750), stream.read(&mut buf[n..])).await;
+        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if budget.is_zero() {
+            break;
+        }
+        let chunk = timeout(INIT_READ_STEP.min(budget), stream.read(&mut buf[n..])).await;
         let nn = match chunk {
             Err(_) => break,
             Ok(Ok(0)) => break,
@@ -153,10 +163,15 @@ async fn read_full_http_request(
     };
     if let Some(content_len) = parse_http_content_length(&buf[..header_end]) {
         let total = header_end.saturating_add(content_len);
+        let deadline = tokio::time::Instant::now() + INIT_READ_TOTAL;
         while buf.len() < total && buf.len() < INIT_READ_MAX {
+            let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if budget.is_zero() {
+                break;
+            }
             let need = (total - buf.len()).min(INIT_READ_MAX - buf.len());
             let mut tmp = vec![0u8; need];
-            let chunk = timeout(Duration::from_millis(750), stream.read(&mut tmp)).await;
+            let chunk = timeout(INIT_READ_STEP.min(budget), stream.read(&mut tmp)).await;
             match chunk {
                 Err(_) => break,
                 Ok(Ok(0)) => break,

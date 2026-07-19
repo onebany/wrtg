@@ -165,14 +165,14 @@ CF Worker — основной fallback для DC с HTTP 302 (DC1/DC3/DC5) и m
 ### Безопасность
 
 - Только IPv4 из Telegram CIDR; порты 80, 443, 5222.
-- Optional secret: `WRTG_TOKEN` в Worker = `WRTG_CF_WORKER_TOKEN` на роутере.
+- Токен настоятельно рекомендуется: `WRTG_TOKEN` в Worker = `WRTG_CF_WORKER_TOKEN` на роутере. Без токена Worker — **публичное открытое реле**: его найдут сканеры и будут жечь вашу квоту Cloudflare.
 - Используйте актуальный код из `openwrt/cf-worker.js` (не open proxy).
 
 ### Развёртывание
 
 1. [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create Worker**.
 2. **Edit code** → вставьте содержимое `openwrt/cf-worker.js` → **Deploy**.
-3. **Settings → Variables and Secrets** → encrypted secret `WRTG_TOKEN=<random>` (`openssl rand -hex 32`).
+3. **Settings → Variables and Secrets** → encrypted secret `WRTG_TOKEN=<random>` (`openssl rand -hex 32`). Не пропускайте этот шаг — без токена Worker открыт для всех.
 4. Скопируйте hostname `name.username.workers.dev`.
 5. На роутере:
 

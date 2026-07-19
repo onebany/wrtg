@@ -1,10 +1,11 @@
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::net::TcpStream;
 
 use wrtg::bridge::{
-    blind_relay, should_skip_ws, try_cf_fallback, try_tcp_fallback, try_ws_bridge, CfBridgeResult,
-    TcpFallbackResult, WsBridgeResult,
+    blind_relay, is_self_target, should_skip_ws, try_cf_fallback, try_tcp_fallback, try_ws_bridge,
+    CfBridgeResult, TcpFallbackResult, WsBridgeResult,
 };
 use wrtg::cf_balancer::proxy_domains;
 use wrtg::cf_proxy_domains::{
@@ -60,12 +61,16 @@ async fn main() {
                 }
             }
             "help" | "h" => {
-                eprintln!("usage: wrtg [--listen ADDR] [--front-ip IP] [--check]");
+                eprintln!("usage: wrtg [--listen ADDR] [--front-ip IP] [--check] [--version]");
+                return;
+            }
+            "version" => {
+                println!("wrtg {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             other => {
                 eprintln!("unknown argument: {other}");
-                return;
+                std::process::exit(2);
             }
         }
     }
@@ -150,17 +155,37 @@ async fn handle_conn(stream: TcpStream) {
         format!("{remote} -> {orig_ip}:{orig_port}")
     };
 
+    // A direct connect to the listener (no DNAT) makes SO_ORIGINAL_DST return
+    // the listener's own address. Relaying that would connect the daemon to
+    // itself and recurse until the connection semaphore is exhausted — drop it.
+    if is_self_target(stream.local_addr().ok(), &orig_ip, orig_port) {
+        static SELF_CONNECT_WARNED: AtomicBool = AtomicBool::new(false);
+        if !SELF_CONNECT_WARNED.swap(true, Ordering::Relaxed) {
+            log::warn!("[{label}] original dst is the listener itself; dropping self-connect");
+        }
+        return;
+    }
+
     match read_client_init(stream).await {
         Ok(Some(parsed)) => {
             handle_handshake(parsed.info, parsed.stream, &orig_ip, orig_port, &label).await;
         }
         Ok(None) => {}
         Err((stream, raw, err)) => {
-            let head = if raw.len() > 64 { &raw[..64] } else { &raw };
-            log::warn!(
-                "[{label}] init: {err} len={} raw64={head:02x?} -> passthrough",
-                raw.len()
-            );
+            if err == "tls passthrough" {
+                // Every TLS passthrough connection lands here; a WARN per
+                // connection floods the router syslog.
+                log::debug!(
+                    "[{label}] init: tls passthrough len={} -> passthrough",
+                    raw.len()
+                );
+            } else {
+                let head = if raw.len() > 64 { &raw[..64] } else { &raw };
+                log::warn!(
+                    "[{label}] init: {err} len={} raw64={head:02x?} -> passthrough",
+                    raw.len()
+                );
+            }
             blind_relay(stream, &orig_ip, orig_port, &raw, &label).await;
         }
     }
@@ -208,7 +233,7 @@ async fn handle_handshake(
         Ok(v) => v,
         Err(e) => {
             log::warn!("[{label}] relay init: {e}");
-            blind_relay(client.into_inner(), orig_ip, orig_port, &[], label).await;
+            blind_relay_prefixed(client, &hs, orig_ip, orig_port, label).await;
             return;
         }
     };
@@ -217,7 +242,7 @@ async fn handle_handshake(
         Ok(v) => v,
         Err(e) => {
             log::warn!("[{label}] crypto ctx: {e}");
-            blind_relay(client.into_inner(), orig_ip, orig_port, &[], label).await;
+            blind_relay_prefixed(client, &hs, orig_ip, orig_port, label).await;
             return;
         }
     };
@@ -280,4 +305,19 @@ async fn handle_handshake(
     let mut initial = hs.handshake.to_vec();
     initial.extend_from_slice(&extra);
     blind_relay(stream, orig_ip, orig_port, &initial, label).await;
+}
+
+/// Blind-relay fallback that replays the already-read client handshake (plus
+/// any bytes past it) upstream — dropping them would leave the session hung.
+async fn blind_relay_prefixed(
+    client: wrtg::handshake::PrefixedStream,
+    hs: &HandshakeInfo,
+    orig_ip: &str,
+    orig_port: u16,
+    label: &str,
+) {
+    let (stream, extra) = client.into_parts();
+    let mut raw = hs.handshake.to_vec();
+    raw.extend_from_slice(&extra);
+    blind_relay(stream, orig_ip, orig_port, &raw, label).await;
 }

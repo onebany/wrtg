@@ -256,13 +256,6 @@ pub fn ws_redirect_blacklist_warranted(dc: i32, target_ip: &str) -> bool {
     target_ip == front_ip() && matches!(dc_key, 2 | 4)
 }
 
-pub fn tcp_target_ip(dc: i32, orig_ip: &str, is_media: bool) -> String {
-    if is_media && !orig_ip.is_empty() && dc_alt_ips().contains_key(orig_ip) {
-        return orig_ip.to_string();
-    }
-    ws_target_ip(dc, orig_ip)
-}
-
 pub fn tcp_fallback_targets(
     dc: i32,
     orig_ip: &str,

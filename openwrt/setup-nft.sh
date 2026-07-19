@@ -25,8 +25,15 @@ add table inet tg_tproxy
 add set inet tg_tproxy telegram_cidr { type ipv4_addr; flags interval; }
 add element inet tg_tproxy telegram_cidr { $ELEMENTS }
 add chain inet tg_tproxy prerouting { type nat hook prerouting priority dstnat; policy accept; }
-add rule inet tg_tproxy prerouting iifname "$LAN_IF" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport { 80, 443, 5222 } dnat ip to $ROUTER_IP:$LISTEN_PORT
 EOF
+
+# LAN_IF may be a space-separated list (e.g. br-lan + NetBird wt0 exit-node);
+# a single iifname "$LAN_IF" with several names is not valid nft syntax.
+for IF in $LAN_IF; do
+	IF=$(printf '%s' "$IF" | tr -d '\r')
+	[ -n "$IF" ] || continue
+	echo "add rule inet tg_tproxy prerouting iifname \"$IF\" meta nfproto ipv4 ip daddr @telegram_cidr tcp dport { 80, 443, 5222 } dnat ip to $ROUTER_IP:$LISTEN_PORT" >> "$RULES"
+done
 
 # nft batches are atomic: a validation/apply error leaves the previous table intact.
 nft -c -f "$RULES"

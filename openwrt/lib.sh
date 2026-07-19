@@ -91,6 +91,20 @@ load_config() {
 		}
 	fi
 
+	# LAN_IF may be a space-separated list; each name goes into an nft iifname
+	# expression, so validate strictly (kernel name limit IFNAMSIZ-1 = 15).
+	_lan_if_ok=1
+	for _if in $LAN_IF; do
+		case "$_if" in
+			''|*[!A-Za-z0-9._-]*) _lan_if_ok=0 ;;
+		esac
+		[ "${#_if}" -le 15 ] || _lan_if_ok=0
+	done
+	[ "$_lan_if_ok" = "1" ] || {
+		echo "wrtg: invalid LAN_IF (interface names: letters, digits, -_.; max 15 chars): $LAN_IF" >&2
+		return 1
+	}
+
 	if [ -z "$ROUTER_IP" ]; then
 		ROUTER_IP="$(
 			ip -4 addr show dev "$LAN_IF" 2>/dev/null |
