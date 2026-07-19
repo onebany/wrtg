@@ -99,7 +99,7 @@ jobs:
           path: dist/${{ matrix.out }}
 
   # mipsel (MT7621/24kc, mips32r2) is a tier-3 Rust target: nightly -Zbuild-std
-  # with the musl.cc cross-gcc instead of cargo-zigbuild.
+  # with zig cc as the cross C compiler (musl.cc is unreliable from CI).
   build-mipsel:
     name: build wrtg-linux-mipsel
     needs: test
@@ -119,8 +119,20 @@ jobs:
 
       - name: Build binary (mips32r2, musl)
         run: |
-          # zig cc as the mipsel cross C compiler (musl.cc is unreliable from CI)
-          printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musl -mcpu=mips32r2 "$@"\n' > /tmp/mipsel-zig-cc
+          # zig cc wrapper as the mipsel cross C compiler. The cc crate passes
+          # --target=mipsel-unknown-linux-musl (LLVM triple), which zig cc does
+          # not parse, so the wrapper strips it and supplies the zig target.
+          cat > /tmp/mipsel-zig-cc <<'EOF'
+          #!/bin/sh
+          args=
+          for a in "$@"; do
+            case "$a" in
+              --target=*) ;;
+              *) args="$args '$a'" ;;
+            esac
+          done
+          eval "exec zig cc -target mipsel-linux-musl -mcpu=mips32r2 $args"
+          EOF
           chmod +x /tmp/mipsel-zig-cc
           MIPSEL_CC=/tmp/mipsel-zig-cc MIPSEL_CFLAGS= sh build-rust.sh mipsel
           file dist/wrtg-linux-mipsel
