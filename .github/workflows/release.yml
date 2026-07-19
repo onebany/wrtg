@@ -121,7 +121,7 @@ jobs:
           # from GH runners, so the proven musl.cc gcc toolchain is mirrored
           # as a release asset (built once from https://musl.cc/).
           curl -fL --retry 3 -o /tmp/mipsel-cross.tgz \
-            https://github.com/onebany/wrtg/releases/download/v0.5.23/mipsel-linux-musl-cross.tgz
+            https://github.com/onebany/wrtg/releases/download/v0.5.23/mipsel-cross.tgz
           echo "82626533bf7e677c225e7cbedf1d5b0d6bc60c3daaf28249e54f0eb805d89b13  /tmp/mipsel-cross.tgz" | sha256sum -c -
           sudo tar -xzf /tmp/mipsel-cross.tgz -C /opt
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf
