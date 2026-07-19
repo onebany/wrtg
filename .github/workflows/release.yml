@@ -115,15 +115,14 @@ jobs:
         with:
           key: mipsel-unknown-linux-musl
 
-      - name: Install mipsel cross toolchain
-        run: |
-          curl -fsSL https://musl.cc/mipsel-linux-musl-cross.tgz | sudo tar -xz -C /opt
-          echo "/opt/mipsel-linux-musl-cross/bin" >> "$GITHUB_PATH"
-          sudo apt-get update -qq && sudo apt-get install -y patchelf
+      - uses: mlugg/setup-zig@v2
 
       - name: Build binary (mips32r2, musl)
         run: |
-          sh build-rust.sh mipsel
+          # zig cc as the mipsel cross C compiler (musl.cc is unreliable from CI)
+          printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musl -mcpu=mips32r2 "$@"\n' > /tmp/mipsel-zig-cc
+          chmod +x /tmp/mipsel-zig-cc
+          MIPSEL_CC=/tmp/mipsel-zig-cc MIPSEL_CFLAGS= sh build-rust.sh mipsel
           file dist/wrtg-linux-mipsel
 
       - uses: actions/upload-artifact@v7

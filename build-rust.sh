@@ -24,15 +24,11 @@ if [ "$ARCH" = "mipsel" ]; then
 		echo "install https://musl.cc/mipsel-linux-musl-cross.tgz or set MIPSEL_CC" >&2
 		exit 1
 	}
-	command -v "$PATCHELF" >/dev/null 2>&1 || {
-		echo "patchelf not found: $PATCHELF (apt install patchelf, or set PATCHELF)" >&2
-		exit 1
-	}
 	mkdir -p "$DIST"
 	echo "Building wrtg for $TARGET (nightly -Zbuild-std) -> $OUT"
 	export CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$MIPSEL_CC"
 	export CC_mipsel_unknown_linux_musl="$MIPSEL_CC"
-	export CFLAGS_mipsel_unknown_linux_musl="-march=mips32r2 -mtune=24kc"
+	export CFLAGS_mipsel_unknown_linux_musl="${MIPSEL_CFLAGS:--march=mips32r2 -mtune=24kc}"
 	# panic=immediate-abort: stock OpenWrt has no libgcc_s.so.1, and the unwinder
 	# is the only hard consumer of it.
 	export RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort -Ctarget-cpu=mips32r2"
@@ -41,9 +37,16 @@ if [ "$ARCH" = "mipsel" ]; then
 		cargo +nightly build -Zbuild-std --release -p wrtg --target "$TARGET"
 	)
 	cp "$ROOT/target/$TARGET/release/wrtg" "$OUT"
-	# crtbegin's weak __register_frame_info@GLIBC_2.0 refs make ld keep a spurious
-	# DT_NEEDED on libgcc_s.so.1; no strong symbols from it are used (verified).
-	"$PATCHELF" --remove-needed libgcc_s.so.1 "$OUT"
+	# gcc toolchains leave a spurious DT_NEEDED on libgcc_s.so.1 (absent on stock
+	# OpenWrt) via crtbegin's weak __register_frame_info@GLIBC_2.0 refs; no strong
+	# symbols from it are used (verified). zig cc builds don't have this problem.
+	if readelf -d "$OUT" | grep -q "libgcc_s"; then
+		command -v "$PATCHELF" >/dev/null 2>&1 || {
+			echo "binary needs libgcc_s.so.1 and patchelf not found: $PATCHELF" >&2
+			exit 1
+		}
+		"$PATCHELF" --remove-needed libgcc_s.so.1 "$OUT"
+	fi
 	chmod +x "$OUT"
 	echo "Built $OUT"
 	exit 0
