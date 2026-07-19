@@ -32,9 +32,9 @@ INSECURE="${WRTG_INSECURE:-0}"
 err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
 
-fetch() { # url dest
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
+fetch() { # url dest — big files (bundle/binary/sources): generous total time on slow links
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 300 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 300 -O "$2" "$1"
 	else err "need curl or wget"; fi
 }
 
