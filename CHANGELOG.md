@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.26 - 2026-07-20
+
+### Fixed
+- **mipsel detection without `od`** — endianness detection in `install.sh`/`bootstrap.sh` used `od -An -tx1`, but minimal busybox builds ship without the `od` applet, so installs on such routers died with "Unsupported CPU: mips" (reported in #6). The EI_DATA byte is now compared in pure shell (`printf` byte compare) — no external tools needed beyond `head`/`tail`.
+
 ## 0.5.25 - 2026-07-20
 
 ### Fixed
