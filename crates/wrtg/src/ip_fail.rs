@@ -106,7 +106,11 @@ pub fn mark_dc_failed(dc: i32, is_media: bool) {
     );
 }
 
-/// Clear direct-WS skip state after a fallback path succeeds.
+/// Clear direct-WS skip state (e.g. after direct WS succeeds again).
+/// Fallback (CF Worker/Proxy/TCP) success deliberately does NOT clear this:
+/// the fallback says nothing about the direct path, and clearing caused a
+/// flap loop under sustained ISP WS blocks — every new connection paid a
+/// full WS timeout before falling back.
 pub fn clear_ws_skip_state(ip: &str, dc: i32, is_media: bool) {
     clear_ip_fail(ip, dc);
     clear_dc_fail(dc, is_media);

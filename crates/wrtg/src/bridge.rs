@@ -16,8 +16,8 @@ use crate::fronting::{
 };
 use crate::handshake::PrefixedStream;
 use crate::ip_fail::{
-    clear_dc_fail, clear_ip_fail, clear_ws_skip_state, mark_dc_failed, mark_ip_failed,
-    should_skip_direct_ws, ws_connect_timeout,
+    clear_dc_fail, clear_ip_fail, mark_dc_failed, mark_ip_failed, should_skip_direct_ws,
+    ws_connect_timeout,
 };
 use crate::media::{
     http_front_host, http_front_passthrough_payload, should_try_worker_passthrough,
@@ -43,12 +43,6 @@ const MAX_CF_PROXY_ATTEMPTS: usize = 3;
 /// already read after the other direction ends — an instant abort would drop
 /// the tail of the session.
 const DRAIN_ON_CLOSE: Duration = Duration::from_secs(2);
-
-fn clear_ws_failure_state(hs: &HandshakeInfo, orig_ip: &str) {
-    let target = ws_target_ip(hs.dc, orig_ip);
-    clear_ws_skip_state(&target, hs.dc, hs.is_media);
-    clear_fronting_fail(&target, hs.dc);
-}
 
 fn ws_ping_interval() -> Duration {
     static D: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
@@ -198,8 +192,10 @@ pub async fn bridge_ws(
     ws_recv_driver.abort();
     if !drained {
         other.abort();
+        // Awaiting a JoinHandle that already completed panics ("polled after
+        // completion"), so only await on the abort path.
+        let _ = other.await;
     }
-    let _ = other.await;
     let _ = ws_send_driver.await;
     let _ = ws_recv_driver.await;
     let _ = ping_driver.await;
@@ -254,8 +250,10 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
     let other = if up_finished { &mut down } else { &mut up };
     if timeout(DRAIN_ON_CLOSE, &mut *other).await.is_err() {
         other.abort();
+        // Awaiting a JoinHandle that already completed panics ("polled after
+        // completion"), so only await on the abort path.
+        let _ = other.await;
     }
-    let _ = other.await;
     log::info!("[{label}] TCP fallback session closed");
 }
 
@@ -494,7 +492,6 @@ pub async fn try_cf_fallback(
         if let Some(ws) =
             send_relay_init(pooled.ws, relay_init, label, hs.dc, "CF worker pool").await
         {
-            clear_ws_failure_state(hs, orig_ip);
             log::info!(
                 "[{label}] DC{} -> WS connected via CF worker pool ({worker})",
                 hs.dc
@@ -519,7 +516,6 @@ pub async fn try_cf_fallback(
                 else {
                     continue;
                 };
-                clear_ws_failure_state(hs, orig_ip);
                 log::info!(
                     "[{label}] DC{} -> WS connected via CF worker {worker}",
                     hs.dc
@@ -549,7 +545,6 @@ pub async fn try_cf_fallback(
             finish_cf_proxy_connect(primary, hs.dc, hs.is_media, relay_init, label).await
         {
             update_proxy_domain_for_dc(hs.dc, &chosen);
-            clear_ws_failure_state(hs, orig_ip);
             bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
             return CfBridgeResult::Connected;
         }
@@ -593,7 +588,6 @@ pub async fn try_cf_fallback(
 
         if let Some((ws, chosen)) = winner {
             update_proxy_domain_for_dc(hs.dc, &chosen);
-            clear_ws_failure_state(hs, orig_ip);
             bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
             return CfBridgeResult::Connected;
         }
@@ -683,9 +677,6 @@ pub async fn try_tcp_fallback(
                 if remote.write_all(relay_init).await.is_err() {
                     continue;
                 }
-                let target = ws_target_ip(dc, orig_ip);
-                clear_ws_skip_state(&target, dc, is_media);
-                clear_fronting_fail(&target, dc);
                 log::info!("[{label}] DC{dc} -> TCP fallback to {dst}:443");
                 bridge_tcp(client, remote, ctx, label).await;
                 return TcpFallbackResult::Connected;
