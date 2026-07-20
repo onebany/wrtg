@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.25 - 2026-07-20
+
+### Fixed
+- **`JoinHandle polled after completion` panics** — after a clean drain in `bridge_ws`/`bridge_tcp` the surviving task's JoinHandle was awaited a second time, panicking the connection task at the end of nearly every session. The handle is now only awaited on the abort path.
+- **Direct-WS flap loop under sustained ISP WS blocks** — a successful fallback (CF Worker/CF Proxy/TCP) cleared the `ip_fail`/`dc_fail`/WS-blacklist state, so the very next connection retried direct WS, paid the full connect timeout again and re-marked it. Observed as Telegram media stalling several seconds per new connection when the ISP starts dropping direct WS to Telegram IPs. Fallback success no longer touches direct-path skip state; direct WS is probed again only after the `WRTG_IP_FAIL_COOLDOWN_SEC` (1 h) mark expires.
+
 ## 0.5.24 - 2026-07-19
 
 ### Added
