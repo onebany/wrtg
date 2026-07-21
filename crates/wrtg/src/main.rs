@@ -180,8 +180,11 @@ async fn handle_conn(stream: TcpStream) {
                     raw.len()
                 );
             } else {
+                // Telegram's HTTP API clients (POST /api on :80) land here on
+                // every connection too; a WARN per connection floods syslog
+                // and rotates real diagnostics out of the ring buffer.
                 let head = if raw.len() > 64 { &raw[..64] } else { &raw };
-                log::warn!(
+                log::debug!(
                     "[{label}] init: {err} len={} raw64={head:02x?} -> passthrough",
                     raw.len()
                 );

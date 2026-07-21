@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.27 - 2026-07-21
+
+### Fixed
+- **Syslog flood from HTTP-API passthrough** — Telegram clients using the HTTP API (`POST /api` on :80) logged a WARN with a 64-byte hex dump per connection, rotating real diagnostics out of the router's ring buffer in seconds on busy networks. Demoted to DEBUG (same as the TLS passthrough branch).
+
 ## 0.5.26 - 2026-07-20
 
 ### Fixed
