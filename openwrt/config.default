@@ -128,6 +128,16 @@ FRONT_IP="149.154.167.220"
 # Default /var/run/wrtg.sock.
 # WRTG_STATS_SOCKET="/var/run/wrtg.sock"
 
+# LAN hosts (IP or CIDR, space-separated) to exclude from the DNAT intercept.
+# Use this for a client that runs its own DPI-bypass: such a tool sends decoy
+# ClientHellos meant to die in transit, but wrtg terminates TCP one hop away, so
+# the decoys arrive as real payload, get relayed to Telegram, and are never
+# answered — the client then retries every few seconds forever. Watch for it as
+# a climbing `passthrough_no_data` in `wrtg --stats`. Excluded hosts reach
+# Telegram directly and keep their own bypass. Applied by setup-nft.sh, so a
+# change needs `/etc/init.d/wrtg restart` (not just reload).
+# WRTG_SKIP_SRC="192.168.20.254"
+
 # Alternative front IP env names. Only useful when running the binary manually
 # without the init script: init always passes `-front-ip "$FRONT_IP"`, and the
 # CLI flag wins over these. (SIGHUP reload DOES read them from this file, so
