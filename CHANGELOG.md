@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.31 - 2026-07-25
+
+### Added
+- **`WRTG_SKIP_SRC`** — LAN hosts (IP/CIDR) excluded from the DNAT intercept. A client running its own DPI-bypass sends decoy ClientHellos (fake SNI, low TTL, bogus TCP-MD5) meant to die in transit; wrtg terminates TCP one hop away, so those decoys arrive as ordinary payload, get relayed to Telegram and are never answered — the client then retries every few seconds indefinitely. Observed live as a `passthrough_no_data` counter climbing by ~13/min. Excluded hosts reach Telegram directly and keep their own bypass. Entries are range-checked before reaching nft, so a typo skips one entry instead of failing the whole ruleset load.
+
+### Changed
+- **The no-data passthrough warning is rate-limited** to one line per destination per 5 minutes; `--stats` keeps the exact count. Unthrottled it fired on every retry of a looping client — the same syslog flood 0.5.28 set out to stop.
+
 ## 0.5.30 - 2026-07-24
 
 ### Fixed
