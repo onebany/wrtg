@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.32 - 2026-07-25
+
+### Fixed
+- **In-place update always failed on a slow link** — `check-update.sh` fetched everything through one helper with `curl --max-time 15`. That option caps the *entire* transfer, not the connect, so pulling the ~5 MB release bundle required a sustained ~2.7 Mbit/s; anything slower aborted with `bundle download failed (…)`, which is what both the LuCI **Update** button and `check-update.sh update` reported. `bootstrap.sh` already separated big downloads (`--connect-timeout 15 --max-time 300 --retry 5`) from small metadata ones, which is why fresh installs kept working while in-place updates did not — `check-update.sh` now uses the same split, and the release feed and `SHA256SUMS` fetches gained retries.
+
 ## 0.5.31 - 2026-07-25
 
 ### Added
