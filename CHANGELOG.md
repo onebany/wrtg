@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.29 - 2026-07-24
+
+### Added
+- **Live update progress in LuCI** — the Status page **Update** button previously fired a blocking POST that only redirected back once the whole download/verify/install/restart finished, so the browser just hung with no feedback. The update now runs in the **background** and the page shows a **live progress bar + stage message** (Preparing → Downloading → Verifying → Extracting → Installing → Done), reloading to the new version when it completes (or showing the error in red on failure). `check-update.sh` streams stage progress when `WRTG_PROGRESS_FILE` is set (no-op otherwise, so CLI use is unchanged); `action.ut` starts the install detached and exposes `act=update_progress`; the status page polls it. The Update button is disabled while an install is in progress.
+
 ## 0.5.28 - 2026-07-24
 
 ### Fixed

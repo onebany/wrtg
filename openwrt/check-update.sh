@@ -23,6 +23,15 @@ REQ_VER="${2:-}"
 err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
 
+# Report update progress for the LuCI status poller. No-op unless
+# WRTG_PROGRESS_FILE is set, so CLI/script use is unchanged. Appends
+# "PCT=<0-100>" + "MSG=<text>" lines; the UI shows the latest of each.
+PROGRESS_FILE="${WRTG_PROGRESS_FILE:-}"
+progress() {
+	[ -n "$PROGRESS_FILE" ] || return 0
+	printf 'PCT=%s\nMSG=%s\n' "$1" "$2" >> "$PROGRESS_FILE" 2>/dev/null || true
+}
+
 fetch() {
 	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
 	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
@@ -166,8 +175,10 @@ do_update() {
 		_target="$(resolve_latest)"
 	fi
 	_tgt_n="$(normalize_ver "$_target")"
+	progress 10 "Preparing update to $_tgt_n …"
 
 	if [ "$_tgt_n" = "$_cur" ]; then
+		progress 100 "Already at $_cur — nothing to update"
 		echo "CURRENT=$_cur"
 		echo "LATEST=$_tgt_n"
 		echo "AVAILABLE=0"
@@ -177,6 +188,7 @@ do_update() {
 	fi
 
 	if [ -z "$REQ_VER" ] && ! ver_gt "$_tgt_n" "$_cur"; then
+		progress 100 "Installed $_cur is newer than $_tgt_n"
 		echo "CURRENT=$_cur"
 		echo "LATEST=$_tgt_n"
 		echo "AVAILABLE=0"
@@ -196,12 +208,16 @@ do_update() {
 	rm -rf "$TMP/extract"
 	mkdir -p "$TMP" "$TMP/extract"
 	_url="$(bundle_url "$_target" "$BUNDLE")"
+	progress 25 "Downloading $_tgt_n …"
 	echo "wrtg: downloading $_target ..."
 	fetch "$_url" "$TMP/$BUNDLE" || err "bundle download failed ($_url)"
+	progress 55 "Verifying checksum …"
 	verify_checksum "$_target" "$TMP/$BUNDLE"
+	progress 65 "Extracting …"
 	tar -xzf "$TMP/$BUNDLE" -C "$TMP/extract" || err "extract failed"
 	_dir="$(find_install_dir "$TMP/extract")" || err "install.sh not found in bundle"
 
+	progress 80 "Installing $_tgt_n (restarting service) …"
 	echo "wrtg: installing $_target (preserving /etc/wrtg/config) ..."
 	ASSUME_YES=1 SKIP_BUILD=1 sh "$_dir/install.sh" || err "install.sh failed"
 
@@ -220,6 +236,7 @@ do_update() {
 	fi
 
 	_new="$(current_ver)"
+	progress 100 "Updated $_cur -> $_new"
 	echo "CURRENT=$_new"
 	echo "LATEST=$_tgt_n"
 	echo "AVAILABLE=0"
