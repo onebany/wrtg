@@ -1,6 +1,6 @@
 [package]
 name = "wrtg"
-version = "0.5.27"
+version = "0.5.28"
 edition = "2021"
 description = "Telegram MTProto transparent proxy (Rust port of tg-tproxy)"
 license = "MIT"
@@ -29,3 +29,4 @@ libc = "0.2"
 
 [dev-dependencies]
 hex = "0.4"
+tokio = { version = "1", features = ["test-util"] }

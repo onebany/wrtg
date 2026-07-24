@@ -112,6 +112,16 @@ FRONT_IP="149.154.167.220"
 # Max simultaneously-served connections (backpressure cap; 0/unset -> 1024)
 # WRTG_MAX_CONNS="1024"
 
+# Idle-session reaper. A relay session with NO payload in either direction for
+# this many seconds is torn down, freeing its connection-semaphore slot. A live
+# Telegram connection carries MTProto pings well inside the window, so only
+# wedged sessions are reaped: a client that vanished without a TCP FIN (a
+# NAT/DPI middlebox keeping the socket alive) or a zombie CF-Worker WS that
+# still answers pings but forwards nothing. Without this, such sessions leak a
+# slot each and eventually wedge the proxy until a manual restart. Default 600
+# (10 min); set 0 to disable.
+# WRTG_SESSION_IDLE_SEC="600"
+
 # Alternative front IP env names. Only useful when running the binary manually
 # without the init script: init always passes `-front-ip "$FRONT_IP"`, and the
 # CLI flag wins over these. (SIGHUP reload DOES read them from this file, so
