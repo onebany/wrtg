@@ -10,7 +10,7 @@
 //! line in each of two lists, and recording one is a relaxed `fetch_add` on a
 //! path that already does TLS.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A monotonic counter. Keep in the same order as [`NAMES`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -55,19 +55,21 @@ impl Stat {
     }
 }
 
-static COUNTERS: [AtomicU64; Stat::COUNT] = [const { AtomicU64::new(0) }; Stat::COUNT];
+/// `AtomicUsize` rather than `AtomicU64`: mips32r2 (MT7621) has no 64-bit
+/// atomics, and these are monotonic counters where a 32-bit wrap is harmless.
+static COUNTERS: [AtomicUsize; Stat::COUNT] = [const { AtomicUsize::new(0) }; Stat::COUNT];
 /// Connections currently being served (gauge, not a counter).
 static ACTIVE: Gauge = Gauge::new();
 /// Connection-semaphore capacity, published once at startup so a snapshot can
 /// show `active/capacity` — the ratio that predicted the 0.5.28 wedge.
-static CAPACITY: AtomicU64 = AtomicU64::new(0);
+static CAPACITY: AtomicUsize = AtomicUsize::new(0);
 
 /// An up/down counter whose guard cannot leak.
 ///
 /// A standalone type rather than a bare `static` so its balance can be tested on
 /// a private instance: the process-wide gauge is shared by every test in the
 /// binary, and asserting on it races whatever else is mid-connection.
-pub struct Gauge(AtomicU64);
+pub struct Gauge(AtomicUsize);
 
 impl Default for Gauge {
     fn default() -> Self {
@@ -77,10 +79,10 @@ impl Default for Gauge {
 
 impl Gauge {
     pub const fn new() -> Self {
-        Self(AtomicU64::new(0))
+        Self(AtomicUsize::new(0))
     }
 
-    pub fn get(&self) -> u64 {
+    pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 
@@ -105,15 +107,15 @@ pub fn inc(s: Stat) {
     COUNTERS[s as usize].fetch_add(1, Ordering::Relaxed);
 }
 
-pub fn get(s: Stat) -> u64 {
+pub fn get(s: Stat) -> usize {
     COUNTERS[s as usize].load(Ordering::Relaxed)
 }
 
 pub fn set_capacity(n: usize) {
-    CAPACITY.store(n as u64, Ordering::Relaxed);
+    CAPACITY.store(n, Ordering::Relaxed);
 }
 
-pub fn active() -> u64 {
+pub fn active() -> usize {
     ACTIVE.get()
 }
 
