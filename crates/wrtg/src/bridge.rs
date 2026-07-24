@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,16 +81,21 @@ fn session_idle_timeout() -> Option<Duration> {
 /// Monotonic activity clock shared by a session's two relay directions. Each
 /// direction records when it last moved payload; the idle guard reads the
 /// latest to decide whether the session has stalled.
+///
+/// Milliseconds-since-session-start are stored in an `AtomicUsize` (not
+/// `AtomicU64`) so the crate builds on 32-bit targets without 64-bit atomics
+/// (e.g. mips32r2). `base` is per-session, so the value can't approach the
+/// 32-bit ms ceiling (~49 days).
 #[derive(Clone)]
 struct Activity {
-    last_ms: Arc<AtomicU64>,
+    last_ms: Arc<AtomicUsize>,
     base: tokio::time::Instant,
 }
 
 impl Activity {
     fn new() -> Self {
         Self {
-            last_ms: Arc::new(AtomicU64::new(0)),
+            last_ms: Arc::new(AtomicUsize::new(0)),
             base: tokio::time::Instant::now(),
         }
     }
@@ -98,7 +103,7 @@ impl Activity {
     /// Record that payload just moved in this session.
     fn touch(&self) {
         self.last_ms
-            .store(self.base.elapsed().as_millis() as u64, Ordering::Relaxed);
+            .store(self.base.elapsed().as_millis() as usize, Ordering::Relaxed);
     }
 
     /// Resolve once `idle` has elapsed since the last [`Activity::touch`]. When
@@ -111,7 +116,8 @@ impl Activity {
         let idle_ms = (idle.as_millis() as u64).max(1);
         loop {
             let elapsed = self.base.elapsed().as_millis() as u64;
-            let since = elapsed.saturating_sub(self.last_ms.load(Ordering::Relaxed));
+            let last = self.last_ms.load(Ordering::Relaxed) as u64;
+            let since = elapsed.saturating_sub(last);
             if since >= idle_ms {
                 return;
             }
