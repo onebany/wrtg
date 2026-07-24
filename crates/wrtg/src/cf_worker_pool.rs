@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::cf_balancer::worker_domains_for_dc;
-use crate::conn_pool::{ConnectFuture, Pool};
+use crate::conn_pool::{ConnectFuture, Key, Pool};
 use crate::mtproto::{dc_default_ip, ws_target_ip};
 use crate::ws::{connect_cf_worker_ws, RawWebSocket};
 
@@ -42,6 +42,18 @@ fn pool_ttl() -> Duration {
 
 fn enabled() -> bool {
     !worker_domains_for_dc(0).is_empty()
+}
+
+/// Warm only the slots this router has actually used.
+///
+/// Seeding the full `5 DC × media` cross-product opened `size × 10` sockets —
+/// 40 at `WRTG_CF_WORKER_POOL_SIZE=4` — and, recycled on the pool TTL, spent
+/// roughly a third of the Cloudflare free-plan daily request quota before a
+/// single client connected. An unseeded slot is not unreachable: the first
+/// connection to it simply pays one cold connect and `schedule_refill` warms it
+/// from there, so a fresh install with no learned map degrades to lazy filling.
+fn seeds() -> Vec<Key> {
+    crate::dc_learn::observed_slots()
 }
 
 fn dst_ip(dc: i32, orig_hint: &str) -> String {
@@ -86,7 +98,8 @@ static POOL: Pool = Pool::new(
     pool_size,
     pool_ttl,
     enabled,
-    &[false, true],
+    seeds,
+    true, // serves_media
     REFILL_INTERVAL,
     "cf worker pool",
 );
@@ -113,4 +126,40 @@ pub fn start_refill_task() {
 
 pub fn warmup_pools() {
     POOL.warmup();
+}
+
+pub async fn depths() -> Vec<(i32, bool, usize)> {
+    POOL.depths().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const _: () = assert!(MAX_POOL_SIZE <= 4);
+
+    #[test]
+    fn pool_size_within_bounds() {
+        assert!((1..=MAX_POOL_SIZE).contains(&pool_size()));
+    }
+
+    #[test]
+    fn seeds_are_reachable_dc_slots() {
+        for (dc, _) in seeds() {
+            assert!(crate::mtproto::valid_dc(dc), "DC{dc} is not a valid DC");
+            assert!(
+                dc_default_ip(dc).is_some(),
+                "DC{dc} has no default IP, so the connector cannot reach it"
+            );
+        }
+    }
+
+    #[test]
+    fn seeds_are_deduplicated() {
+        let s = seeds();
+        let mut sorted = s.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(s.len(), sorted.len(), "a slot would be warmed twice");
+    }
 }

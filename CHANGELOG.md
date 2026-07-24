@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.30 - 2026-07-24
+
+### Fixed
+- **CF-Worker pool burned the Cloudflare quota while idle** — the pools warmed the full `5 DC × media` cross-product, so `WRTG_CF_WORKER_POOL_SIZE=4` opened **40** WebSockets to Cloudflare (observed: 33 of 43 established sockets on an idle router). Recycled on the 120 s TTL by a 45 s refill, that is ~20 Worker invocations a minute — roughly **29 k of the free plan's 100 k daily requests before a single client connects**. Pools are now demand-driven: `ws_pool` seeds only DCs that actually have a front target, `cf_worker_pool` seeds only `(DC, media)` slots present in the learned DC map, and the background refill skips any slot not acquired in the last 10 minutes. An unseeded slot still works — the first connection pays one cold connect and `schedule_refill` warms it from there.
+- **Worker passthrough could not fall back once the tunnel was up** — `cf-worker.js` called `connect()` without awaiting `socket.opened`. Cloudflare's `connect()` is lazy: it returns a socket immediately and surfaces a failed upstream TCP connect only on the first read/write, so the Worker answered `101` for a dead destination. wrtg saw a healthy WebSocket, relayed into a void, and — because `relay_via_worker` only reports failure when the *initial* send fails — never tried the next worker or the front fallback. The Worker now awaits `opened` and returns `502`, which re-arms the retry ladder that was already there.
+- **Refill sweeps could stampede on a degraded network** — the refill task used `tokio::time::interval`'s default `Burst` behaviour while sweeping slots sequentially at up to 8 s per connect. A sweep slower than its 45 s interval made the missed ticks fire back-to-back, turning a slow network into a reconnect storm. Now `MissedTickBehavior::Delay`.
+- **Direct-WS warmup paid timeouts for unreachable DCs** — warmup looped `1..=5` regardless of `WRTG_FRONT_DCS`, so with the default `2,4` the DC1/3/5 attempts each burned the full connect timeout: a 60 s warmup to end up with 4 usable connections.
+- **Expired pooled connections were dropped without a close frame**, leaving the peer (and a Cloudflare isolate) to time out on its own. They are now closed on eviction.
+
+### Changed
+- **Log records carry their real syslog severity** — every line went to stderr, and procd tags a service's stderr `LOG_ERR`, so the entire daemon log landed in `daemon.err`: `logread -l`, severity filters, remote-syslog priorities and the LuCI level chips were all meaningless, and "any errors today?" monitoring fired on every restart. INFO/DEBUG now go to stdout (procd: `LOG_INFO`) and WARN/ERROR to stderr. This replaces `env_logger` with a ~40-line `log::Log`, one dependency fewer in the binary. `RUST_LOG` still accepts a bare level (`RUST_LOG=debug`); per-module directives are no longer supported and fall back to the default.
+- **CF Worker fails closed without a token** — `cf-worker.js` skipped the check entirely when `WRTG_TOKEN` was unset, leaving the Worker an open relay into Telegram's subnets for anyone who found it. It now returns `503` until the secret is configured, matching what the README has always advised.
+
+### Added
+- **`wrtg --stats`** — a snapshot of the running daemon over a unix socket (`WRTG_STATS_SOCKET`, default `/var/run/wrtg.sock`): which fallback rung traffic landed on, connection-semaphore usage against its cap, per-slot pool depth, and counters for the failure modes that used to be invisible (`all_paths_failed`, `idle_reaped`, `passthrough_no_data`, `self_connect_dropped`). Answering "is the relay healthy?" previously meant scraping `logread` and sampling `/proc/<pid>` from cron.
+- **CF Worker backpressure** — the downstream loop now pauses while more than 1 MiB is queued to the client. A fast download over a slow LAN link previously grew the isolate's send queue until it tripped the 128 MB memory limit and killed the tunnel mid-transfer.
+- **A `no data` warning on worker passthrough** — a tunnel that establishes but carries zero bytes back is now logged and counted rather than failing silently.
+
+### Tests
+- `conn_pool` and `watchdog` gained coverage (76 → 113 tests). They were the two untested modules most implicated in past production wedges: `conn_pool` is the pool dedup refactor, and `watchdog` owns the connection semaphore whose exhaustion caused the 0.5.28 daily wedge. Pool expiry is now a pure, testable function, and `serve_with_cap` lets the backpressure behaviour be exercised without a process-wide env var.
+
 ## 0.5.29 - 2026-07-24
 
 ### Added
