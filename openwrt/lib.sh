@@ -40,6 +40,7 @@ load_config() {
 	WRTG_TCP_KEEPALIVE_SEC=""
 	WRTG_MAX_CONNS=""
 	WRTG_SESSION_IDLE_SEC=""
+	WRTG_STATS_SOCKET=""
 	CIDR_URL="https://core.telegram.org/resources/cidr.txt"
 	CIDR_UPDATE_HOUR="4"
 
@@ -82,6 +83,7 @@ load_config() {
 	WRTG_TCP_KEEPALIVE_SEC=$(printf '%s' "$WRTG_TCP_KEEPALIVE_SEC" | tr -d '\r')
 	WRTG_MAX_CONNS=$(printf '%s' "$WRTG_MAX_CONNS" | tr -d '\r')
 	WRTG_SESSION_IDLE_SEC=$(printf '%s' "$WRTG_SESSION_IDLE_SEC" | tr -d '\r')
+	WRTG_STATS_SOCKET=$(printf '%s' "$WRTG_STATS_SOCKET" | tr -d '\r')
 	CIDR_URL=$(printf '%s' "$CIDR_URL" | tr -d '\r')
 	CIDR_UPDATE_HOUR=$(printf '%s' "$CIDR_UPDATE_HOUR" | tr -d '\r')
 
