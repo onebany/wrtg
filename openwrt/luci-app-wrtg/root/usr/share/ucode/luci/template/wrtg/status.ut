@@ -53,6 +53,11 @@ let upd_avail = kv_line(upd_cache, 'AVAILABLE') == '1';
 let upd_status = kv_line(upd_cache, 'STATUS');
 let upd_current = kv_line(upd_cache, 'CURRENT');
 
+// A background update is in progress while its progress file exists and has
+// not yet recorded EXIT=<code>. Drives the live progress bar / poller below.
+let upd_prog_raw = readfile('/tmp/wrtg-update-progress') ?? '';
+let upd_running = length(upd_prog_raw) > 0 && !match(upd_prog_raw, /EXIT=/);
+
 let version = trim(readfile('/etc/wrtg/version') ?? '');
 let pid = sh('pidof wrtg 2>/dev/null');
 let running = length(pid) > 0;
@@ -165,8 +170,16 @@ function badge(ok, yes, no) {
 			<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
 			<button class="cbi-button cbi-button-action" type="submit" name="act" value="check_update">{{ _('Check for updates') }}</button>
 			<button class="cbi-button cbi-button-apply" type="submit" name="act" value="do_update"
-				{% if (!upd_avail) { %}disabled title="{{ _('Check first; Update enables when a newer release exists') }}"{% } %}>{{ _('Update') }}</button>
+				{% if (upd_running) { %}disabled{% } else if (!upd_avail) { %}disabled title="{{ _('Check first; Update enables when a newer release exists') }}"{% } %}>{{ _('Update') }}</button>
 		</form>
+
+		<div id="wrtg-upd-progress" style="margin-top:10px;{% if (!upd_running) { %}display:none;{% } %}">
+			<div style="height:8px;background:var(--border-color-medium,#444);border-radius:4px;overflow:hidden">
+				<div id="wrtg-upd-bar" style="height:100%;width:2%;background:#1e88e5;transition:width .35s ease"></div>
+			</div>
+			<div id="wrtg-upd-msg" class="wrtg-kv" style="margin-top:6px;opacity:.85">{{ _('Starting update …') }}</div>
+		</div>
+
 		<p style="font-size:12px;opacity:.6;margin:8px 0 0">{{ _('Downloads from GitHub releases (onebany/wrtg). Keeps /etc/wrtg/config and restarts the service.') }}</p>
 	</div>
 
@@ -241,6 +254,38 @@ function badge(ok, yes, no) {
 	var k='wrtg-auto', cb=document.getElementById('wrtg-auto'), t=null;
 	function apply(){ if(cb.checked){ t=setTimeout(function(){location.reload();},5000); localStorage.setItem(k,'1'); } else { if(t)clearTimeout(t); localStorage.removeItem(k); } }
 	cb.checked = localStorage.getItem(k)==='1'; cb.addEventListener('change',apply); apply();
+})();
+</script>
+
+<script>
+// Live update progress: poll act=update_progress while an install runs, drive
+// the bar/message, and reload on completion so the new version shows.
+(function(){
+	var box=document.getElementById('wrtg-upd-progress');
+	if(!box) return;
+	var bar=document.getElementById('wrtg-upd-bar'), msg=document.getElementById('wrtg-upd-msg');
+	var url={{ sprintf('%J', base + '?act=update_progress') }};
+	var running={{ upd_running ? 'true' : 'false' }};
+	function parse(t){ var o={}; (t||'').split('\n').forEach(function(l){ var i=l.indexOf('='); if(i>0) o[l.slice(0,i)]=l.slice(i+1); }); return o; }
+	function poll(){
+		fetch(url,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+			var d=parse(t);
+			box.style.display='block';
+			var p=parseInt(d.pct||'0',10); if(isNaN(p)) p=0;
+			bar.style.width=Math.max(2,Math.min(100,p))+'%';
+			if(d.msg) msg.textContent=d.msg;
+			if(d.running==='0'){
+				var ok=(d.ok==='1');
+				bar.style.width='100%';
+				bar.style.background=ok?'#2e7d32':'#c62828';
+				msg.textContent=d.msg||(ok?'Done.':'Update failed.');
+				setTimeout(function(){location.reload();}, ok?2500:6000);
+				return;
+			}
+			setTimeout(poll,1500);
+		}).catch(function(){ setTimeout(poll,2500); });
+	}
+	if(running) poll();
 })();
 </script>
 
