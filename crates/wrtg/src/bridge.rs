@@ -49,6 +49,11 @@ const DRAIN_ON_CLOSE: Duration = Duration::from_secs(2);
 /// Default idle-session cap (seconds). See [`session_idle_timeout`].
 const DEFAULT_SESSION_IDLE_SEC: u64 = 600;
 
+/// How often a given destination may report a no-data worker passthrough.
+const NO_DATA_LOG_EVERY: Duration = Duration::from_secs(300);
+/// Destinations that already reported one, keyed `ip:port`.
+static NO_DATA_LOGGED: crate::ttl_map::TtlMap<String> = crate::ttl_map::TtlMap::new();
+
 /// How the relay loop ended, so teardown can tell a normal close from an
 /// idle-timeout reap.
 enum RelayEnd {
@@ -934,10 +939,18 @@ async fn relay_via_worker(
     }
     if down_bytes.load(Ordering::Relaxed) == 0 {
         crate::stats::inc(crate::stats::Stat::PassthroughNoData);
-        log::warn!(
-            "[{label}] worker passthrough via {worker} returned no data \
-             ({orig_ip}:{port} may be unreachable from the CF edge)"
-        );
+        // A client that retries a failing destination every few seconds would
+        // otherwise put this on every attempt — the exact syslog flood 0.5.28
+        // set out to stop. One line per destination per window; `--stats` keeps
+        // the exact count.
+        if NO_DATA_LOGGED.mark_if_absent(format!("{orig_ip}:{port}"), NO_DATA_LOG_EVERY) {
+            log::warn!(
+                "[{label}] worker passthrough via {worker} returned no data \
+                 ({orig_ip}:{port} may be unreachable from the CF edge; \
+                 further occurrences quiet for {}s — see `wrtg --stats`)",
+                NO_DATA_LOG_EVERY.as_secs()
+            );
+        }
     }
     Ok(())
 }
