@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.31 - 2026-07-25
+
+### Added
+- **`WRTG_SKIP_SRC`** — LAN hosts (IP/CIDR) excluded from the DNAT intercept. A client running its own DPI-bypass sends decoy ClientHellos (fake SNI, low TTL, bogus TCP-MD5) meant to die in transit; wrtg terminates TCP one hop away, so those decoys arrive as ordinary payload, get relayed to Telegram and are never answered — the client then retries every few seconds indefinitely. Observed live as a `passthrough_no_data` counter climbing by ~13/min. Excluded hosts reach Telegram directly and keep their own bypass. Entries are range-checked before reaching nft, so a typo skips one entry instead of failing the whole ruleset load.
+
+### Changed
+- **The no-data passthrough warning is rate-limited** to one line per destination per 5 minutes; `--stats` keeps the exact count. Unthrottled it fired on every retry of a looping client — the same syslog flood 0.5.28 set out to stop.
+
 ## 0.5.30 - 2026-07-24
 
 ### Fixed
@@ -17,12 +25,6 @@
 - **`wrtg --stats`** — a snapshot of the running daemon over a unix socket (`WRTG_STATS_SOCKET`, default `/var/run/wrtg.sock`): which fallback rung traffic landed on, connection-semaphore usage against its cap, per-slot pool depth, and counters for the failure modes that used to be invisible (`all_paths_failed`, `idle_reaped`, `passthrough_no_data`, `self_connect_dropped`). Answering "is the relay healthy?" previously meant scraping `logread` and sampling `/proc/<pid>` from cron.
 - **CF Worker backpressure** — the downstream loop now pauses while more than 1 MiB is queued to the client. A fast download over a slow LAN link previously grew the isolate's send queue until it tripped the 128 MB memory limit and killed the tunnel mid-transfer.
 - **A `no data` warning on worker passthrough** — a tunnel that establishes but carries zero bytes back is now logged and counted rather than failing silently.
-
-### Added
-- **`WRTG_SKIP_SRC`** — LAN hosts (IP/CIDR) excluded from the DNAT intercept. A client running its own DPI-bypass sends decoy ClientHellos (fake SNI, low TTL, bogus TCP-MD5) meant to die in transit; wrtg terminates TCP one hop away, so those decoys arrive as ordinary payload, get relayed to Telegram and are never answered — the client then retries every few seconds indefinitely. Observed live as a `passthrough_no_data` counter climbing by ~13/min. Excluded hosts reach Telegram directly and keep their own bypass. Entries are range-checked before reaching nft, so a typo skips one entry instead of failing the whole ruleset load.
-
-### Changed
-- **The no-data passthrough warning is rate-limited** to one line per destination per 5 minutes; `--stats` keeps the exact count. Unthrottled it fired on every retry of a looping client — the same syslog flood 0.5.28 set out to stop.
 
 ### Tests
 - `conn_pool` and `watchdog` gained coverage (76 → 113 tests). They were the two untested modules most implicated in past production wedges: `conn_pool` is the pool dedup refactor, and `watchdog` owns the connection semaphore whose exhaustion caused the 0.5.28 daily wedge. Pool expiry is now a pure, testable function, and `serve_with_cap` lets the backpressure behaviour be exercised without a process-wide env var.
