@@ -11,6 +11,9 @@
 ### Added
 - **`WRTG_SESSION_IDLE_SEC`** — tunable idle-session cap (default 600s, `0` disables), documented in `config.default` and wired through `lib.sh` / the init script.
 
+### CI
+- **mipsel build pinned to `nightly-2026-07-21`** — the tier-3 `-Zbuild-std` path used a rolling `nightly`, and a post-2026-07-21 nightly `rustc` ICEs compiling `tokio` for `mips32r2` (`rustc_codegen_ssa/.../operand.rs:291: not immediate`), breaking `build.yml`/`release.yml` for every commit regardless of content. Both workflows now pin the last-known-good nightly; `build-rust.sh` honours `RUST_NIGHTLY` (default `nightly`) so local builds are unaffected. Bump the pin once the upstream ICE is fixed.
+
 ## 0.5.27 - 2026-07-21
 
 ### Fixed

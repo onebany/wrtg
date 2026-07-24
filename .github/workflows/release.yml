@@ -104,11 +104,17 @@ jobs:
     name: build wrtg-linux-mipsel
     needs: test
     runs-on: ubuntu-latest
+    # Pinned nightly: the tier-3 -Zbuild-std path is exposed to rolling-nightly
+    # rustc ICEs (a post-2026-07-21 nightly ICEs compiling tokio for mips32r2).
+    # Bump this once the upstream fix lands. build-rust.sh reads RUST_NIGHTLY.
+    env:
+      RUST_NIGHTLY: nightly-2026-07-21
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
           components: rust-src
 
       - uses: Swatinem/rust-cache@v2
