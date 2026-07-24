@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tokio::time::timeout;
 
-use crate::conn_pool::{ConnectFuture, Pool};
+use crate::conn_pool::{ConnectFuture, Key, Pool};
 use crate::mtproto::{dc_front_ip, ws_domains, ws_target_ip};
 use crate::ws::{connect_ws, RawWebSocket};
 
@@ -43,6 +43,17 @@ fn enabled() -> bool {
     (1..=5).any(|dc| !dc_front_ip(dc).is_empty())
 }
 
+/// Warm only the DCs that actually have a front target. Seeding all of 1..=5
+/// meant that with the default `WRTG_FRONT_DCS=2,4` the DC1/3/5 attempts each
+/// burned the full connect timeout — a 60 s warmup to end up with 4 usable
+/// connections.
+fn seeds() -> Vec<Key> {
+    (1..=5)
+        .filter(|&dc| !dc_front_ip(dc).is_empty())
+        .map(|dc| (dc, false))
+        .collect()
+}
+
 fn connect(dc: i32, is_media: bool, hint: String) -> ConnectFuture {
     Box::pin(async move {
         let target = if hint.is_empty() {
@@ -75,7 +86,8 @@ static POOL: Pool = Pool::new(
     pool_size,
     pool_ttl,
     enabled,
-    &[false],
+    seeds,
+    false, // serves_media
     REFILL_INTERVAL,
     "ws pool",
 );
@@ -104,6 +116,10 @@ pub fn warmup_pools() {
     POOL.warmup();
 }
 
+pub async fn depths() -> Vec<(i32, bool, usize)> {
+    POOL.depths().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +131,21 @@ mod tests {
     fn pool_size_within_bounds() {
         let sz = pool_size();
         assert!((1..=MAX_POOL_SIZE).contains(&sz));
+    }
+
+    #[test]
+    fn seeds_are_non_media_and_have_a_front() {
+        for (dc, is_media) in seeds() {
+            assert!(!is_media, "direct WS pool never serves media slots");
+            assert!(
+                !dc_front_ip(dc).is_empty(),
+                "DC{dc} was seeded without a front target"
+            );
+        }
+    }
+
+    #[test]
+    fn seeds_never_exceed_the_dc_range() {
+        assert!(seeds().len() <= 5);
     }
 }

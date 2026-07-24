@@ -307,6 +307,7 @@ pub async fn bridge_ws(
     let _ = ws_recv_driver.await;
     let _ = ping_driver.await;
     if idle_reaped {
+        crate::stats::inc(crate::stats::Stat::IdleReaped);
         log::info!("[{label_down}] {dc_tag} WS session idle-closed{media_tag}");
     } else {
         log::debug!("[{label_down}] {dc_tag} WS session closed{media_tag}");
@@ -382,6 +383,7 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
             down.abort();
             let _ = up.await;
             let _ = down.await;
+            crate::stats::inc(crate::stats::Stat::IdleReaped);
             log::info!("[{label}] TCP fallback session idle-closed");
         }
     }
@@ -499,6 +501,7 @@ pub async fn try_ws_bridge(
                 clear_ip_fail(&target_ip, hs.dc);
                 clear_dc_fail(hs.dc, hs.is_media);
                 clear_fronting_fail(&target_ip, hs.dc);
+                crate::stats::inc(crate::stats::Stat::WsPoolHit);
                 log::debug!("[{label}] DC{} -> WS connected via pool ({domain})", hs.dc);
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 schedule_refill(hs.dc, hs.is_media, target_ip.clone());
@@ -523,6 +526,7 @@ pub async fn try_ws_bridge(
             clear_ip_fail(&target_ip, hs.dc);
             clear_dc_fail(hs.dc, hs.is_media);
             clear_fronting_fail(&target_ip, hs.dc);
+            crate::stats::inc(crate::stats::Stat::WsDirect);
             log::debug!(
                 "[{label}] DC{} -> WS connected via {}",
                 hs.dc,
@@ -550,6 +554,7 @@ pub async fn try_ws_bridge(
                 clear_ip_fail(&target_ip, hs.dc);
                 clear_dc_fail(hs.dc, hs.is_media);
                 clear_fronting_fail(&target_ip, hs.dc);
+                crate::stats::inc(crate::stats::Stat::Fronting);
                 log::debug!(
                     "[{label}] DC{} -> WS connected via fronting {}",
                     hs.dc,
@@ -622,6 +627,7 @@ pub async fn try_cf_fallback(
         if let Some(ws) =
             send_relay_init(pooled.ws, relay_init, label, hs.dc, "CF worker pool").await
         {
+            crate::stats::inc(crate::stats::Stat::CfWorker);
             log::debug!(
                 "[{label}] DC{} -> WS connected via CF worker pool ({worker})",
                 hs.dc
@@ -646,6 +652,7 @@ pub async fn try_cf_fallback(
                 else {
                     continue;
                 };
+                crate::stats::inc(crate::stats::Stat::CfWorker);
                 log::debug!(
                     "[{label}] DC{} -> WS connected via CF worker {worker}",
                     hs.dc
@@ -746,6 +753,7 @@ async fn finish_cf_proxy_connect(
                 log::warn!("[{label}] DC{dc} CF proxy relay init failed: {e}");
                 return None;
             }
+            crate::stats::inc(crate::stats::Stat::CfProxy);
             log::debug!("[{label}] DC{dc} -> WS connected via CF proxy {cf_domain_owned}");
             Some((ws, cf_domain_owned))
         }
@@ -807,6 +815,7 @@ pub async fn try_tcp_fallback(
                 if remote.write_all(relay_init).await.is_err() {
                     continue;
                 }
+                crate::stats::inc(crate::stats::Stat::TcpFallback);
                 log::debug!("[{label}] DC{dc} -> TCP fallback to {dst}:443");
                 bridge_tcp(client, remote, ctx, label).await;
                 return TcpFallbackResult::Connected;
@@ -843,6 +852,7 @@ async fn relay_via_worker(
     } else {
         String::new()
     };
+    crate::stats::inc(crate::stats::Stat::WorkerPassthrough);
     log::debug!(
         "[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}{http_host} ({} bytes)",
         initial.len()
@@ -888,9 +898,15 @@ async fn relay_via_worker(
     });
 
     let act_down = activity.clone();
+    // A tunnel that establishes but never carries a byte back is the signature
+    // of a Worker whose own TCP connect to the DC failed; count it so the
+    // condition is visible in `--stats` instead of only as silent retries.
+    let down_bytes = Arc::new(AtomicUsize::new(0));
+    let down_seen = down_bytes.clone();
     let mut down = tokio::spawn(async move {
         while let Ok(Some(payload)) = ws_read.recv_binary(&pong_tx).await {
             act_down.touch();
+            down_seen.fetch_add(payload.len(), Ordering::Relaxed);
             if cw.write_all(&payload).await.is_err() {
                 break;
             }
@@ -911,9 +927,17 @@ async fn relay_via_worker(
     writer.abort();
     let _ = writer.await;
     if idle_reaped {
+        crate::stats::inc(crate::stats::Stat::IdleReaped);
         log::info!("[{label}] worker passthrough session idle-closed");
     } else {
         log::debug!("[{label}] worker passthrough session closed");
+    }
+    if down_bytes.load(Ordering::Relaxed) == 0 {
+        crate::stats::inc(crate::stats::Stat::PassthroughNoData);
+        log::warn!(
+            "[{label}] worker passthrough via {worker} returned no data \
+             ({orig_ip}:{port} may be unreachable from the CF edge)"
+        );
     }
     Ok(())
 }
@@ -995,6 +1019,7 @@ pub async fn blind_relay(
     initial: &[u8],
     label: &str,
 ) {
+    crate::stats::inc(crate::stats::Stat::BlindRelay);
     let http_payload = if orig_port == 80 {
         http_front_passthrough_payload(initial, orig_ip, orig_port)
     } else {

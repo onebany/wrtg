@@ -90,6 +90,18 @@ pub fn lookup(ip: &str) -> Option<(i32, bool)> {
     LEARNED.read().unwrap().get(ip).copied()
 }
 
+/// The distinct `(dc, is_media)` slots this router has actually seen, sorted.
+///
+/// Used to seed the connection pools: warming the full `5 DC × media`
+/// cross-product opens slots the router will never use, which on the CF-Worker
+/// pool is a direct hit to the Cloudflare request quota.
+pub fn observed_slots() -> Vec<(i32, bool)> {
+    let mut slots: Vec<(i32, bool)> = LEARNED.read().unwrap().values().copied().collect();
+    slots.sort_unstable();
+    slots.dedup();
+    slots
+}
+
 /// Record `ip → (dc, is_media)` observed from a handshake that embedded the DC.
 /// No-op when the IP is already resolvable from the hardcoded tables or was
 /// already learned with the same DC — so the persist file only grows on a
