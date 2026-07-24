@@ -68,6 +68,7 @@ start_service() {
 	_add_env WRTG_WS_PING_SEC "$WRTG_WS_PING_SEC"
 	_add_env WRTG_TCP_KEEPALIVE_SEC "$WRTG_TCP_KEEPALIVE_SEC"
 	_add_env WRTG_MAX_CONNS "$WRTG_MAX_CONNS"
+	_add_env WRTG_SESSION_IDLE_SEC "$WRTG_SESSION_IDLE_SEC"
 
 	for dc in 1 2 3 4 5 203; do
 		dc_ip=
