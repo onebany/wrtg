@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.28 - 2026-07-24
+
+### Fixed
+- **Proxy wedges after ~a day until a manual restart** — relay sessions had no idle guard, so a session that went silent in *both* directions while its sockets stayed alive was never torn down and held its connection-semaphore permit forever. Two real cases produce this: a client that vanishes without a TCP FIN because a NAT/DPI middlebox keeps ACKing keepalives, and a zombie CF-Worker WebSocket that still answers pings but forwards nothing. Enough of them accumulate over a day until the `serve()` semaphore (cap 1024) is exhausted and no new connection is accepted — the process is alive but stops serving, so procd's auto-respawn never fires and only a manual `/etc/init.d/wrtg restart` recovers it. `bridge_ws`, `bridge_tcp` and the Worker passthrough now reap a session after `WRTG_SESSION_IDLE_SEC` (default 600s) with no payload in either direction. A live Telegram connection carries MTProto pings well inside that window, so legitimate idle sessions are unaffected; set `WRTG_SESSION_IDLE_SEC=0` to disable.
+
+### Changed
+- **Per-session logging demoted to DEBUG** — the per-connection lifecycle lines (`DC… from orig dst`, `direct handshake OK`, `WS skipped`, `WS connected via …`, `-> trying …`, `TCP fallback to …`, `worker passthrough …`, `passthrough -> …`, `WS/TCP/passthrough session closed`) ran at INFO and, on a busy network, rotated the router's syslog ring buffer in ~25 minutes — long before a nightly wedge could be inspected. They are now DEBUG (`RUST_LOG=debug` restores them). INFO now carries only notable events: startup, SIGHUP reload, degradation marks (`marked failed` / `blacklisted`), the new `session idle-closed` reap, `all bridge paths failed`, and warnings/errors.
+
+### Added
+- **`WRTG_SESSION_IDLE_SEC`** — tunable idle-session cap (default 600s, `0` disables), documented in `config.default` and wired through `lib.sh` / the init script.
+
+### CI
+- **mipsel build pinned to `nightly-2026-07-21`** — the tier-3 `-Zbuild-std` path used a rolling `nightly`, and a post-2026-07-21 nightly `rustc` ICEs compiling `tokio` for `mips32r2` (`rustc_codegen_ssa/.../operand.rs:291: not immediate`), breaking `build.yml`/`release.yml` for every commit regardless of content. Both workflows now pin the last-known-good nightly; `build-rust.sh` honours `RUST_NIGHTLY` (default `nightly`) so local builds are unaffected. Bump the pin once the upstream ICE is fixed.
+
 ## 0.5.27 - 2026-07-21
 
 ### Fixed

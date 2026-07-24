@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,6 +45,86 @@ const MAX_CF_PROXY_ATTEMPTS: usize = 3;
 /// already read after the other direction ends — an instant abort would drop
 /// the tail of the session.
 const DRAIN_ON_CLOSE: Duration = Duration::from_secs(2);
+
+/// Default idle-session cap (seconds). See [`session_idle_timeout`].
+const DEFAULT_SESSION_IDLE_SEC: u64 = 600;
+
+/// How the relay loop ended, so teardown can tell a normal close from an
+/// idle-timeout reap.
+enum RelayEnd {
+    /// One direction hit EOF/error — drain the survivor before aborting.
+    Closed { up_finished: bool },
+    /// No payload moved in either direction for [`session_idle_timeout`] — the
+    /// session is wedged; tear it down without draining.
+    Idle,
+}
+
+/// Upper bound on how long a relay session may pass with **no payload in either
+/// direction** before wrtg tears it down. A live Telegram connection carries
+/// MTProto pings well inside this window, so only wedged sessions reach it: a
+/// client that vanished without a TCP FIN (a NAT/DPI middlebox keeping the
+/// socket alive) or a zombie CF-Worker WS that still answers pings but forwards
+/// nothing. Each such session otherwise holds a connection-semaphore permit
+/// forever; enough accumulate over a day and wedge the proxy until a manual
+/// restart. `WRTG_SESSION_IDLE_SEC=0` disables the guard.
+fn session_idle_timeout() -> Option<Duration> {
+    static D: std::sync::LazyLock<Option<Duration>> = std::sync::LazyLock::new(|| {
+        let secs = std::env::var("WRTG_SESSION_IDLE_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SESSION_IDLE_SEC);
+        (secs > 0).then(|| Duration::from_secs(secs))
+    });
+    *D
+}
+
+/// Monotonic activity clock shared by a session's two relay directions. Each
+/// direction records when it last moved payload; the idle guard reads the
+/// latest to decide whether the session has stalled.
+///
+/// Milliseconds-since-session-start are stored in an `AtomicUsize` (not
+/// `AtomicU64`) so the crate builds on 32-bit targets without 64-bit atomics
+/// (e.g. mips32r2). `base` is per-session, so the value can't approach the
+/// 32-bit ms ceiling (~49 days).
+#[derive(Clone)]
+struct Activity {
+    last_ms: Arc<AtomicUsize>,
+    base: tokio::time::Instant,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Self {
+            last_ms: Arc::new(AtomicUsize::new(0)),
+            base: tokio::time::Instant::now(),
+        }
+    }
+
+    /// Record that payload just moved in this session.
+    fn touch(&self) {
+        self.last_ms
+            .store(self.base.elapsed().as_millis() as usize, Ordering::Relaxed);
+    }
+
+    /// Resolve once `idle` has elapsed since the last [`Activity::touch`]. When
+    /// `idle` is `None` the guard is disabled and this never resolves.
+    async fn idle_reached(&self, idle: Option<Duration>) {
+        let Some(idle) = idle else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        let idle_ms = (idle.as_millis() as u64).max(1);
+        loop {
+            let elapsed = self.base.elapsed().as_millis() as u64;
+            let last = self.last_ms.load(Ordering::Relaxed) as u64;
+            let since = elapsed.saturating_sub(last);
+            if since >= idle_ms {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis((idle_ms - since).max(50))).await;
+        }
+    }
+}
 
 fn ws_ping_interval() -> Duration {
     static D: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
@@ -135,7 +217,11 @@ pub async fn bridge_ws(
         }
     });
 
+    let idle = session_idle_timeout();
+    let activity = Activity::new();
+
     let send_tx_up = send_tx.clone();
+    let act_up = activity.clone();
     let mut splitter = splitter;
     let mut up = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
@@ -143,6 +229,7 @@ pub async fn bridge_ws(
             match client_read.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
+                    act_up.touch();
                     let chunk = up_crypto.client_to_telegram(&buf[..n]);
                     if let Some(ref mut sp) = splitter {
                         let parts = sp.split(&chunk);
@@ -168,8 +255,10 @@ pub async fn bridge_ws(
         }
     });
 
+    let act_down = activity.clone();
     let mut down = tokio::spawn(async move {
         while let Some(payload) = recv_rx.recv().await {
+            act_down.touch();
             let out = down_crypto.telegram_to_client(&payload);
             if client_write.write_all(&out).await.is_err() {
                 break;
@@ -177,29 +266,51 @@ pub async fn bridge_ws(
         }
     });
 
-    let up_finished = tokio::select! {
-        _ = &mut up => true,
-        _ = &mut down => false,
+    let ended = tokio::select! {
+        _ = &mut up => RelayEnd::Closed { up_finished: true },
+        _ = &mut down => RelayEnd::Closed { up_finished: false },
+        _ = activity.idle_reached(idle) => RelayEnd::Idle,
     };
     drop(send_tx);
     drop(pong_tx);
-    // Let the surviving direction flush what it already read (with the WS
-    // drivers still alive to move it) before tearing everything down.
-    let other = if up_finished { &mut down } else { &mut up };
-    let drained = timeout(DRAIN_ON_CLOSE, &mut *other).await.is_ok();
-    ping_driver.abort();
-    ws_send_driver.abort();
-    ws_recv_driver.abort();
-    if !drained {
-        other.abort();
-        // Awaiting a JoinHandle that already completed panics ("polled after
-        // completion"), so only await on the abort path.
-        let _ = other.await;
-    }
+
+    let idle_reaped = match ended {
+        RelayEnd::Closed { up_finished } => {
+            // Let the surviving direction flush what it already read (with the
+            // WS drivers still alive to move it) before tearing everything down.
+            let other = if up_finished { &mut down } else { &mut up };
+            let drained = timeout(DRAIN_ON_CLOSE, &mut *other).await.is_ok();
+            ping_driver.abort();
+            ws_send_driver.abort();
+            ws_recv_driver.abort();
+            if !drained {
+                other.abort();
+                // Awaiting a JoinHandle that already completed panics ("polled
+                // after completion"), so only await on the abort path.
+                let _ = other.await;
+            }
+            false
+        }
+        RelayEnd::Idle => {
+            // Both directions are silent — no data to drain. Abort everything.
+            up.abort();
+            down.abort();
+            ping_driver.abort();
+            ws_send_driver.abort();
+            ws_recv_driver.abort();
+            let _ = up.await;
+            let _ = down.await;
+            true
+        }
+    };
     let _ = ws_send_driver.await;
     let _ = ws_recv_driver.await;
     let _ = ping_driver.await;
-    log::info!("[{label_down}] {dc_tag} WS session closed{media_tag}");
+    if idle_reaped {
+        log::info!("[{label_down}] {dc_tag} WS session idle-closed{media_tag}");
+    } else {
+        log::debug!("[{label_down}] {dc_tag} WS session closed{media_tag}");
+    }
 }
 
 pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCtx, label: &str) {
@@ -207,12 +318,17 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
     let (mut rr, mut rw) = remote.into_split();
     let (mut up_crypto, mut down_crypto) = ctx.split();
 
+    let idle = session_idle_timeout();
+    let activity = Activity::new();
+
+    let act_up = activity.clone();
     let mut up = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match cr.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
+                    act_up.touch();
                     let out = up_crypto.client_to_telegram(&buf[..n]);
                     if rw.write_all(&out).await.is_err() {
                         break;
@@ -224,12 +340,14 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
         let _ = rw.shutdown().await;
     });
 
+    let act_down = activity.clone();
     let mut down = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match rr.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
+                    act_down.touch();
                     let out = down_crypto.telegram_to_client(&buf[..n]);
                     if cw.write_all(&out).await.is_err() {
                         break;
@@ -241,20 +359,32 @@ pub async fn bridge_tcp(client: PrefixedStream, remote: TcpStream, ctx: CryptoCt
         let _ = cw.shutdown().await;
     });
 
-    let up_finished = tokio::select! {
-        _ = &mut up => true,
-        _ = &mut down => false,
+    let ended = tokio::select! {
+        _ = &mut up => RelayEnd::Closed { up_finished: true },
+        _ = &mut down => RelayEnd::Closed { up_finished: false },
+        _ = activity.idle_reached(idle) => RelayEnd::Idle,
     };
-    // Let the surviving direction flush what it already read before aborting
-    // it; an instant abort drops the tail of the session.
-    let other = if up_finished { &mut down } else { &mut up };
-    if timeout(DRAIN_ON_CLOSE, &mut *other).await.is_err() {
-        other.abort();
-        // Awaiting a JoinHandle that already completed panics ("polled after
-        // completion"), so only await on the abort path.
-        let _ = other.await;
+    match ended {
+        RelayEnd::Closed { up_finished } => {
+            // Let the surviving direction flush what it already read before
+            // aborting it; an instant abort drops the tail of the session.
+            let other = if up_finished { &mut down } else { &mut up };
+            if timeout(DRAIN_ON_CLOSE, &mut *other).await.is_err() {
+                other.abort();
+                // Awaiting a JoinHandle that already completed panics ("polled
+                // after completion"), so only await on the abort path.
+                let _ = other.await;
+            }
+            log::debug!("[{label}] TCP fallback session closed");
+        }
+        RelayEnd::Idle => {
+            up.abort();
+            down.abort();
+            let _ = up.await;
+            let _ = down.await;
+            log::info!("[{label}] TCP fallback session idle-closed");
+        }
     }
-    log::info!("[{label}] TCP fallback session closed");
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -299,7 +429,7 @@ async fn try_ws_with_domains(
     let connect_timeout = ws_connect_timeout(dc, is_media);
 
     for domain in domains {
-        log::info!("[{label}] DC{dc} -> trying WSS {domain} via {target_ip}");
+        log::debug!("[{label}] DC{dc} -> trying WSS {domain} via {target_ip}");
         match timeout(
             connect_timeout,
             connect_ws_with_headers(target_ip, domain, "/apiws", connect_timeout, &[]),
@@ -369,7 +499,7 @@ pub async fn try_ws_bridge(
                 clear_ip_fail(&target_ip, hs.dc);
                 clear_dc_fail(hs.dc, hs.is_media);
                 clear_fronting_fail(&target_ip, hs.dc);
-                log::info!("[{label}] DC{} -> WS connected via pool ({domain})", hs.dc);
+                log::debug!("[{label}] DC{} -> WS connected via pool ({domain})", hs.dc);
                 bridge_ws(client, ws, ctx, splitter, label, hs.dc, hs.is_media).await;
                 schedule_refill(hs.dc, hs.is_media, target_ip.clone());
                 return WsBridgeResult::Connected;
@@ -393,7 +523,7 @@ pub async fn try_ws_bridge(
             clear_ip_fail(&target_ip, hs.dc);
             clear_dc_fail(hs.dc, hs.is_media);
             clear_fronting_fail(&target_ip, hs.dc);
-            log::info!(
+            log::debug!(
                 "[{label}] DC{} -> WS connected via {}",
                 hs.dc,
                 connected_domain
@@ -420,7 +550,7 @@ pub async fn try_ws_bridge(
                 clear_ip_fail(&target_ip, hs.dc);
                 clear_dc_fail(hs.dc, hs.is_media);
                 clear_fronting_fail(&target_ip, hs.dc);
-                log::info!(
+                log::debug!(
                     "[{label}] DC{} -> WS connected via fronting {}",
                     hs.dc,
                     connected_domain
@@ -492,7 +622,7 @@ pub async fn try_cf_fallback(
         if let Some(ws) =
             send_relay_init(pooled.ws, relay_init, label, hs.dc, "CF worker pool").await
         {
-            log::info!(
+            log::debug!(
                 "[{label}] DC{} -> WS connected via CF worker pool ({worker})",
                 hs.dc
             );
@@ -504,7 +634,7 @@ pub async fn try_cf_fallback(
 
     // CF Worker direct
     for worker in worker_domains_for_dc(hs.dc) {
-        log::info!("[{label}] DC{} -> trying CF worker {worker}", hs.dc);
+        log::debug!("[{label}] DC{} -> trying CF worker {worker}", hs.dc);
         match timeout(
             CF_CONNECT_TIMEOUT,
             connect_cf_worker_ws(&worker, &dst_fallback, hs.dc, CF_CONNECT_TIMEOUT),
@@ -516,7 +646,7 @@ pub async fn try_cf_fallback(
                 else {
                     continue;
                 };
-                log::info!(
+                log::debug!(
                     "[{label}] DC{} -> WS connected via CF worker {worker}",
                     hs.dc
                 );
@@ -540,7 +670,7 @@ pub async fn try_cf_fallback(
         .collect();
 
     if let Some(primary) = cf_domains.first() {
-        log::info!("[{label}] DC{} -> trying CF proxy {primary}", hs.dc);
+        log::debug!("[{label}] DC{} -> trying CF proxy {primary}", hs.dc);
         if let Some((ws, chosen)) =
             finish_cf_proxy_connect(primary, hs.dc, hs.is_media, relay_init, label).await
         {
@@ -616,7 +746,7 @@ async fn finish_cf_proxy_connect(
                 log::warn!("[{label}] DC{dc} CF proxy relay init failed: {e}");
                 return None;
             }
-            log::info!("[{label}] DC{dc} -> WS connected via CF proxy {cf_domain_owned}");
+            log::debug!("[{label}] DC{dc} -> WS connected via CF proxy {cf_domain_owned}");
             Some((ws, cf_domain_owned))
         }
         Ok(Err(e)) => {
@@ -677,7 +807,7 @@ pub async fn try_tcp_fallback(
                 if remote.write_all(relay_init).await.is_err() {
                     continue;
                 }
-                log::info!("[{label}] DC{dc} -> TCP fallback to {dst}:443");
+                log::debug!("[{label}] DC{dc} -> TCP fallback to {dst}:443");
                 bridge_tcp(client, remote, ctx, label).await;
                 return TcpFallbackResult::Connected;
             }
@@ -713,7 +843,7 @@ async fn relay_via_worker(
     } else {
         String::new()
     };
-    log::info!(
+    log::debug!(
         "[{label}] passthrough via CF worker {worker} -> {orig_ip}:{port}{http_host} ({} bytes)",
         initial.len()
     );
@@ -722,6 +852,9 @@ async fn relay_via_worker(
     let (mut cr, mut cw) = client.into_split();
     let (data_tx, mut data_rx) = mpsc::channel::<Vec<u8>>(WS_CHANNEL_CAP);
     let (pong_tx, mut pong_rx) = mpsc::channel::<Vec<u8>>(8);
+
+    let idle = session_idle_timeout();
+    let activity = Activity::new();
 
     let writer = tokio::spawn(async move {
         loop {
@@ -738,12 +871,14 @@ async fn relay_via_worker(
         }
     });
 
+    let act_up = activity.clone();
     let mut up = tokio::spawn(async move {
         let mut buf = vec![0u8; RELAY_BUF_SIZE];
         loop {
             match cr.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    act_up.touch();
                     if data_tx.send(buf[..n].to_vec()).await.is_err() {
                         break;
                     }
@@ -752,8 +887,10 @@ async fn relay_via_worker(
         }
     });
 
+    let act_down = activity.clone();
     let mut down = tokio::spawn(async move {
         while let Ok(Some(payload)) = ws_read.recv_binary(&pong_tx).await {
+            act_down.touch();
             if cw.write_all(&payload).await.is_err() {
                 break;
             }
@@ -761,17 +898,23 @@ async fn relay_via_worker(
         let _ = cw.shutdown().await;
     });
 
-    // Tear down as soon as either direction ends (client closed OR upstream closed),
-    // so a stalled tunnel can't leak the connection.
-    tokio::select! {
-        _ = &mut up => down.abort(),
-        _ = &mut down => up.abort(),
-    }
+    // Tear down as soon as either direction ends (client closed OR upstream
+    // closed), or the tunnel goes idle in both directions — a stalled tunnel
+    // must not leak the connection (and its semaphore permit).
+    let idle_reaped = tokio::select! {
+        _ = &mut up => { down.abort(); false }
+        _ = &mut down => { up.abort(); false }
+        _ = activity.idle_reached(idle) => { up.abort(); down.abort(); true }
+    };
     // The writer can be blocked in send_binary on a dead socket; abort it
     // instead of awaiting it forever (same as the bridge_ws drivers).
     writer.abort();
     let _ = writer.await;
-    log::info!("[{label}] worker passthrough session closed");
+    if idle_reaped {
+        log::info!("[{label}] worker passthrough session idle-closed");
+    } else {
+        log::debug!("[{label}] worker passthrough session closed");
+    }
     Ok(())
 }
 
@@ -810,7 +953,7 @@ async fn try_worker_passthrough(
     // Tunnel straight to the client's real DC IP from the CF edge; the ISP
     // blocks it locally but the Worker reaches Telegram subnets.
     let dst_ip = orig_ip;
-    log::info!(
+    log::debug!(
         "[{label}] worker passthrough trying {} worker(s) -> {dst_ip}:{port}",
         workers.len()
     );
@@ -867,7 +1010,7 @@ pub async fn blind_relay(
             Err(c) => c,
         }
     } else {
-        log::info!("[{label}] HTTP :80 -> front passthrough (skip worker)");
+        log::debug!("[{label}] HTTP :80 -> front passthrough (skip worker)");
         client
     };
 
@@ -921,23 +1064,23 @@ pub async fn blind_relay(
 
     if let Some(h) = wire_host.as_deref() {
         if h != orig_ip {
-            log::info!(
+            log::debug!(
                 "[{label}] passthrough -> {dst} host={h} ({} bytes initial)",
                 front_payload.len()
             );
         } else if front_payload.len() != initial.len() {
-            log::info!(
+            log::debug!(
                 "[{label}] passthrough -> {dst} media-http ({} bytes initial)",
                 front_payload.len()
             );
         } else {
-            log::info!(
+            log::debug!(
                 "[{label}] passthrough -> {dst} ({} bytes initial)",
                 front_payload.len()
             );
         }
     } else {
-        log::info!(
+        log::debug!(
             "[{label}] passthrough -> {dst} ({} bytes initial)",
             front_payload.len()
         );
@@ -976,7 +1119,7 @@ pub async fn blind_relay(
 
 fn log_http_response(label: &str, dst: &str, chunk: &[u8]) {
     let Ok(head) = std::str::from_utf8(chunk) else {
-        log::info!(
+        log::debug!(
             "[{label}] passthrough <- {dst} ({} bytes, non-utf8)",
             chunk.len()
         );
@@ -993,9 +1136,9 @@ fn log_http_response(label: &str, dst: &str, chunk: &[u8]) {
         })
         .unwrap_or_default();
     if location.is_empty() {
-        log::info!("[{label}] passthrough <- {dst} {status}");
+        log::debug!("[{label}] passthrough <- {dst} {status}");
     } else {
-        log::info!("[{label}] passthrough <- {dst} {status} Location={location}");
+        log::debug!("[{label}] passthrough <- {dst} {status} Location={location}");
     }
 }
 
@@ -1050,5 +1193,46 @@ mod tests {
         // No local addr / unparsable IP — can't be proven local, allow.
         assert!(!is_self_target(None, "192.168.1.1", 8443));
         assert!(!is_self_target(Some(local), "", 8443));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_guard_fires_without_activity() {
+        let act = Activity::new();
+        // No touch: the guard must resolve once the idle window elapses.
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            act.idle_reached(Some(Duration::from_secs(10))),
+        )
+        .await
+        .expect("idle guard should resolve after the idle window with no activity");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_guard_deferred_by_activity() {
+        let act = Activity::new();
+        let toucher = act.clone();
+        // Touch every 1s; with a 3s idle window the guard must never fire.
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                toucher.touch();
+            }
+        });
+        let res = tokio::time::timeout(
+            Duration::from_secs(6),
+            act.idle_reached(Some(Duration::from_secs(3))),
+        )
+        .await;
+        assert!(
+            res.is_err(),
+            "idle guard must not fire while activity continues"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_guard_disabled_never_fires() {
+        let act = Activity::new();
+        let res = tokio::time::timeout(Duration::from_secs(3600), act.idle_reached(None)).await;
+        assert!(res.is_err(), "a disabled idle guard must never resolve");
     }
 }

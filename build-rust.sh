@@ -24,8 +24,12 @@ if [ "$ARCH" = "mipsel" ]; then
 		echo "install https://musl.cc/mipsel-linux-musl-cross.tgz or set MIPSEL_CC" >&2
 		exit 1
 	}
+	# Nightly toolchain used for -Zbuild-std. Pinned in CI (RUST_NIGHTLY) to a
+	# known-good date so a rolling-nightly rustc ICE can't break the release;
+	# defaults to the rolling `nightly` for local builds.
+	RUST_NIGHTLY="${RUST_NIGHTLY:-nightly}"
 	mkdir -p "$DIST"
-	echo "Building wrtg for $TARGET (nightly -Zbuild-std) -> $OUT"
+	echo "Building wrtg for $TARGET ($RUST_NIGHTLY -Zbuild-std) -> $OUT"
 	export CARGO_TARGET_MIPSEL_UNKNOWN_LINUX_MUSL_LINKER="$MIPSEL_CC"
 	export CC_mipsel_unknown_linux_musl="$MIPSEL_CC"
 	export CFLAGS_mipsel_unknown_linux_musl="${MIPSEL_CFLAGS--march=mips32r2 -mtune=24kc}"
@@ -34,7 +38,7 @@ if [ "$ARCH" = "mipsel" ]; then
 	export RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort -Ctarget-cpu=mips32r2"
 	(
 		cd "$ROOT"
-		cargo +nightly build -Zbuild-std --release -p wrtg --target "$TARGET"
+		cargo "+${RUST_NIGHTLY}" build -Zbuild-std --release -p wrtg --target "$TARGET"
 	)
 	cp "$ROOT/target/$TARGET/release/wrtg" "$OUT"
 	# gcc toolchains leave a spurious DT_NEEDED on libgcc_s.so.1 (absent on stock

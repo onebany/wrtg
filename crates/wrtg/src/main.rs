@@ -209,7 +209,7 @@ async fn handle_handshake(
         if let Some((dc, media)) = dc_from_orig_dst(orig_ip) {
             hs.dc = dc;
             hs.is_media = media;
-            log::info!("[{label}] DC{dc} from orig dst {orig_ip} (media={media})");
+            log::debug!("[{label}] DC{dc} from orig dst {orig_ip} (media={media})");
         }
     }
 
@@ -223,7 +223,7 @@ async fn handle_handshake(
     }
 
     let media_tag = if hs.is_media { " media" } else { "" };
-    log::info!(
+    log::debug!(
         "[{label}] direct handshake OK: DC{}{media_tag} proto=0x{:08X}",
         hs.dc,
         hs.proto_int
@@ -255,7 +255,7 @@ async fn handle_handshake(
     let mut ctx = ctx;
 
     if should_skip_ws(hs.dc, bridge_media, orig_ip) {
-        log::info!(
+        log::debug!(
             "[{label}] DC{}{media_tag} WS skipped (blacklist or DC ip_fail)",
             hs.dc
         );
