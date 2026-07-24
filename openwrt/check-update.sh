@@ -32,15 +32,21 @@ progress() {
 	printf 'PCT=%s\nMSG=%s\n' "$1" "$2" >> "$PROGRESS_FILE" 2>/dev/null || true
 }
 
-fetch() {
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
+fetch() { # url dest — big files (the release bundle): generous total time on slow links.
+	# `--max-time` caps the WHOLE transfer, not just the connect. At the old flat
+	# 15 s a ~5 MB bundle needed a sustained ~2.7 Mbit/s or the update aborted
+	# with "bundle download failed" — on a congested or DPI-throttled link that
+	# is a routine failure. bootstrap.sh already splits big from small this way;
+	# check-update.sh kept the flat timeout, so installs worked and in-place
+	# updates (LuCI "Update", `check-update.sh update`) did not.
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 15 --max-time 300 --retry 5 --retry-connrefused "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 300 -t 5 -O "$2" "$1"
 	else err "need curl or wget"; fi
 }
 
-fetch_optional() {
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O "$2" "$1"
+fetch_optional() { # url dest — small metadata (release feed, SHA256SUMS).
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 30 --retry 3 --retry-connrefused "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T 30 -t 3 -O "$2" "$1"
 	else return 1; fi
 }
 
