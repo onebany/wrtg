@@ -1,6 +1,6 @@
 [package]
 name = "wrtg"
-version = "0.5.29"
+version = "0.5.30"
 edition = "2021"
 description = "Telegram MTProto transparent proxy (Rust port of tg-tproxy)"
 license = "MIT"
@@ -14,7 +14,6 @@ aes = "0.9"
 base64 = "0.22"
 bytes = "1"
 ctr = "0.10"
-env_logger = "0.11"
 log = "0.4"
 rand = "0.10"
 socket2 = { version = "0.6", features = ["all"] }

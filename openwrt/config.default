@@ -122,6 +122,12 @@ FRONT_IP="149.154.167.220"
 # (10 min); set 0 to disable.
 # WRTG_SESSION_IDLE_SEC="600"
 
+# Unix socket the daemon serves its `wrtg --stats` snapshot on (fallback-path
+# counters, connection-semaphore usage, per-slot pool depth). Both the daemon
+# and the CLI read this variable, so changing it here keeps them in step.
+# Default /var/run/wrtg.sock.
+# WRTG_STATS_SOCKET="/var/run/wrtg.sock"
+
 # Alternative front IP env names. Only useful when running the binary manually
 # without the init script: init always passes `-front-ip "$FRONT_IP"`, and the
 # CLI flag wins over these. (SIGHUP reload DOES read them from this file, so

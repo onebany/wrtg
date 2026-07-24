@@ -26,16 +26,20 @@ use wrtg::ws_pool::{start_refill_task, warmup_pools};
 #[tokio::main]
 async fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    wrtg::logger::init(log::LevelFilter::Info);
 
-    // A hand-run `--check` lacks the procd environment the daemon is started
-    // with, so it would report the config file's worker/proxy as "not set".
-    // Seed env from the config file first (real env still wins) so diagnostics
-    // reflect the running setup.
-    let check_mode = env::args()
-        .skip(1)
-        .any(|a| a.trim_start_matches('-').trim_end_matches('\r') == "check");
-    if check_mode {
+    // A hand-run `--check` / `--stats` lacks the procd environment the daemon is
+    // started with, so it would report the config file's worker/proxy as "not
+    // set" (and look for the stats socket in the wrong place). Seed env from the
+    // config file first (real env still wins) so diagnostics reflect the running
+    // setup.
+    let mode = |name: &str| {
+        env::args()
+            .skip(1)
+            .any(|a| a.trim_start_matches('-').trim_end_matches('\r') == name)
+    };
+    let check_mode = mode("check");
+    if check_mode || mode("stats") {
         for (k, v) in wrtg::config::import_config_file(&wrtg::config::config_file_path()) {
             if env::var_os(&k).is_none() {
                 env::set_var(&k, v);
@@ -50,6 +54,9 @@ async fn main() {
         let key = arg.trim_start_matches('-').trim_end_matches('\r');
         match key {
             "check" => {}
+            "stats" => {
+                std::process::exit(wrtg::stats::print(&wrtg::stats::socket_path()).await);
+            }
             "listen" => {
                 if let Some(v) = args.next() {
                     cfg.listen_addr = v.trim_end_matches('\r').to_string();
@@ -61,7 +68,9 @@ async fn main() {
                 }
             }
             "help" | "h" => {
-                eprintln!("usage: wrtg [--listen ADDR] [--front-ip IP] [--check] [--version]");
+                eprintln!(
+                    "usage: wrtg [--listen ADDR] [--front-ip IP] [--check] [--stats] [--version]"
+                );
                 return;
             }
             "version" => {
@@ -102,6 +111,7 @@ async fn main() {
     );
 
     spawn_reload_handler();
+    wrtg::stats::serve(wrtg::stats::socket_path());
 
     let listener = match bind_transparent(&cfg.listen_addr).await {
         Ok(l) => l,
@@ -159,6 +169,7 @@ async fn handle_conn(stream: TcpStream) {
     // the listener's own address. Relaying that would connect the daemon to
     // itself and recurse until the connection semaphore is exhausted — drop it.
     if is_self_target(stream.local_addr().ok(), &orig_ip, orig_port) {
+        wrtg::stats::inc(wrtg::stats::Stat::SelfConnectDropped);
         static SELF_CONNECT_WARNED: AtomicBool = AtomicBool::new(false);
         if !SELF_CONNECT_WARNED.swap(true, Ordering::Relaxed) {
             log::warn!("[{label}] original dst is the listener itself; dropping self-connect");
@@ -303,6 +314,7 @@ async fn handle_handshake(
         TcpFallbackResult::Failed(c) => client = c,
     };
 
+    wrtg::stats::inc(wrtg::stats::Stat::AllPathsFailed);
     log::warn!("[{label}] all bridge paths failed, blind relay");
     let (stream, extra) = client.into_parts();
     let mut initial = hs.handshake.to_vec();

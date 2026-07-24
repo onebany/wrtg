@@ -1,6 +1,8 @@
 import { connect } from "cloudflare:sockets";
 
 const ALLOWED_PORTS = new Set([80, 443, 5222]);
+// Bytes allowed to queue toward the client before the DC read loop pauses.
+const SEND_HIGH_WATER = 1 << 20;
 const TELEGRAM_CIDRS = [
   ["91.108.4.0", 22],
   ["91.108.8.0", 22],
@@ -60,7 +62,13 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    if (env.WRTG_TOKEN && request.headers.get("X-WRTG-Token") !== env.WRTG_TOKEN) {
+    // Fail closed. With no secret configured this Worker is an open relay into
+    // Telegram's subnets that scanners will find and bill to your Cloudflare
+    // quota, so refuse to serve rather than quietly running wide open.
+    if (!env.WRTG_TOKEN) {
+      return new Response("Worker not configured: set the WRTG_TOKEN secret", { status: 503 });
+    }
+    if (request.headers.get("X-WRTG-Token") !== env.WRTG_TOKEN) {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -77,6 +85,13 @@ export default {
     let socket;
     try {
       socket = connect({ hostname: dst, port });
+      // `connect()` is lazy: it hands back a socket immediately and only
+      // surfaces a failed TCP connect on the first read/write. Returning 101
+      // without awaiting `opened` meant a dead upstream still looked like a
+      // healthy tunnel — wrtg relayed into a void, and because the WebSocket
+      // itself was fine it never tried the next worker or the front fallback.
+      // Failing here instead lets that retry ladder do its job.
+      await socket.opened;
     } catch {
       return new Response("Upstream connect failed", { status: 502 });
     }
@@ -109,7 +124,16 @@ export default {
         while (true) {
           const { value, done } = await tcpReader.read();
           if (done) break;
-          if (value) server.send(value);
+          if (value) {
+            server.send(value);
+            // Stop pulling from the DC while the client is behind. Without this
+            // a fast download over a slow LAN link grows the send queue inside
+            // the isolate until it trips the 128 MB memory limit and the tunnel
+            // dies mid-transfer.
+            while (server.bufferedAmount > SEND_HIGH_WATER) {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          }
         }
       } catch {
         try { server.close(1011, "tcp read failed"); } catch {}
