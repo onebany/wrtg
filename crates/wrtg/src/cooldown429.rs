@@ -70,7 +70,12 @@ impl Cooldown429 {
     }
 
     /// Time left on `key`'s cooldown; `ZERO` when it may be used again.
-    /// Expired entries are dropped on access.
+    ///
+    /// An expired entry is *kept* (with its strike count) until it has been
+    /// quiet for a whole `max` window, so a key that keeps earning 429s backs
+    /// off further each time. Dropping it the moment it expired — which is what
+    /// this did originally — reset the strike count on every probe, so the
+    /// exponential backoff never actually escalated past the base delay.
     pub fn remaining(&self, key: &str) -> Duration {
         let key = key.trim().to_ascii_lowercase();
         if key.is_empty() {
@@ -85,7 +90,10 @@ impl Cooldown429 {
         };
         let now = Instant::now();
         if until <= now {
-            map.remove(&key);
+            // Quiet for longer than a full backoff window — forget it entirely.
+            if until.elapsed() > (self.max)() {
+                map.remove(&key);
+            }
             return Duration::ZERO;
         }
         until - now
@@ -199,5 +207,37 @@ mod tests {
         static E: Cooldown429 = Cooldown429::new(base, max, "test-empty");
         E.mark_for("  ", Duration::from_secs(60));
         assert!(!E.is_active(""));
+    }
+
+    #[test]
+    fn strikes_survive_expiry_so_backoff_escalates() {
+        // Regression: `remaining()` used to delete the entry the moment it
+        // expired, so the next mark started from zero strikes and the delay
+        // was pinned at the base forever (observed live as a Worker that kept
+        // being retried every 60s instead of backing off).
+        fn tiny_base() -> Duration {
+            Duration::from_millis(20)
+        }
+        fn big_max() -> Duration {
+            Duration::from_secs(60)
+        }
+        static S: Cooldown429 = Cooldown429::new(tiny_base, big_max, "test-strikes");
+        S.clear_all();
+
+        S.mark_for("esc.example", Duration::ZERO);
+        let first = S.remaining("esc.example");
+        assert!(first > Duration::ZERO);
+
+        // Let it lapse, then probe (this is what used to wipe the strikes).
+        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(S.remaining("esc.example"), Duration::ZERO);
+
+        S.mark_for("esc.example", Duration::ZERO);
+        let second = S.remaining("esc.example");
+        assert!(
+            second > first,
+            "second cooldown ({second:?}) must exceed the first ({first:?})"
+        );
+        S.clear_all();
     }
 }
