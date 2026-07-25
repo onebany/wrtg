@@ -325,12 +325,15 @@ fn websocket_accept(key: &str) -> String {
     STANDARD.encode(sha1.finalize())
 }
 
+/// Errors keep their typed handshake status: callers must be able to tell an
+/// HTTP 429 (rate limit / spent quota → back the Worker off) from a transport
+/// failure by status code rather than by matching on the message text.
 pub async fn connect_cf_worker_ws(
     worker_domain: &str,
     dst_ip: &str,
     dc: i32,
     connect_timeout: Duration,
-) -> std::io::Result<RawWebSocket> {
+) -> Result<RawWebSocket, WsConnectError> {
     let path = format!("/apiws?dst={dst_ip}&dc={dc}");
     connect_cf_worker(worker_domain, &path, connect_timeout).await
 }
@@ -342,7 +345,7 @@ pub async fn connect_cf_worker_tcp(
     dst_ip: &str,
     dst_port: u16,
     connect_timeout: Duration,
-) -> std::io::Result<RawWebSocket> {
+) -> Result<RawWebSocket, WsConnectError> {
     let path = format!("/apiws?dst={dst_ip}&dc=0&port={dst_port}");
     connect_cf_worker(worker_domain, &path, connect_timeout).await
 }
@@ -351,7 +354,7 @@ async fn connect_cf_worker(
     worker_domain: &str,
     path: &str,
     connect_timeout: Duration,
-) -> std::io::Result<RawWebSocket> {
+) -> Result<RawWebSocket, WsConnectError> {
     let token = std::env::var("WRTG_CF_WORKER_TOKEN")
         .unwrap_or_default()
         .trim()
@@ -369,7 +372,6 @@ async fn connect_cf_worker(
         &headers,
     )
     .await
-    .map_err(WsConnectError::into_io)
 }
 
 pub fn is_ws_redirect(err: &std::io::Error) -> bool {
