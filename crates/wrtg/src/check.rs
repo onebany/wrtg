@@ -77,7 +77,13 @@ async fn probe_cf_worker(worker: &str, dst_ip: &str, dc: i32) -> Result<(), Stri
     connect_cf_worker_ws(worker, dst_ip, dc, PROBE_TIMEOUT)
         .await
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            // Surface the status verbatim: HTTP 429 means the Worker is rate
+            // limited / out of daily quota, which is a very different fix from
+            // a transport failure.
+            WsConnectError::Handshake(h) => format!("HTTP {}", h.status_code),
+            other => other.into_io().to_string(),
+        })
 }
 
 async fn probe_cf_proxy(cf_domain: &str, ws_host: &str) -> Result<(), String> {

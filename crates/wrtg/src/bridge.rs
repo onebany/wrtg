@@ -12,6 +12,7 @@ use crate::cf_balancer::{
     worker_domains_for_dc, worker_passthrough_disabled,
 };
 use crate::cf_proxy::try_cf_proxy_domain;
+use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429, usable_workers};
 use crate::cf_worker_pool::{acquire as acquire_cf_worker, schedule_refill as schedule_cf_refill};
 use crate::fronting::{
     clear_fronting_fail, mark_fronting_failed, should_skip_fronting, try_ws_fronting,
@@ -643,8 +644,17 @@ pub async fn try_cf_fallback(
         }
     }
 
-    // CF Worker direct
-    for worker in worker_domains_for_dc(hs.dc) {
+    // CF Worker direct. Workers that answered 429 are skipped until their
+    // cooldown expires — re-dialling a rate-limited Worker only spends more of
+    // the quota that is already gone.
+    let (workers, cooling) = usable_workers(worker_domains_for_dc(hs.dc));
+    if cooling > 0 && workers.is_empty() {
+        log::debug!(
+            "[{label}] DC{} all {cooling} CF worker(s) rate-limited (429) -> CF proxy",
+            hs.dc
+        );
+    }
+    for worker in workers {
         log::debug!("[{label}] DC{} -> trying CF worker {worker}", hs.dc);
         match timeout(
             CF_CONNECT_TIMEOUT,
@@ -657,6 +667,7 @@ pub async fn try_cf_fallback(
                 else {
                     continue;
                 };
+                clear_worker_429(&worker);
                 crate::stats::inc(crate::stats::Stat::CfWorker);
                 log::debug!(
                     "[{label}] DC{} -> WS connected via CF worker {worker}",
@@ -667,7 +678,12 @@ pub async fn try_cf_fallback(
                 return CfBridgeResult::Connected;
             }
             Ok(Err(e)) => {
-                log::warn!("[{label}] DC{} CF worker {worker} failed: {e}", hs.dc);
+                mark_worker_429(&worker, &e);
+                log::warn!(
+                    "[{label}] DC{} CF worker {worker} failed: {}",
+                    hs.dc,
+                    e.into_io()
+                );
             }
             Err(_) => {
                 log::warn!("[{label}] DC{} CF worker {worker} timeout", hs.dc);
@@ -981,9 +997,20 @@ async fn try_worker_passthrough(
         log::warn!("[{label}] worker passthrough skipped (WRTG_NO_WORKER_PASSTHROUGH)");
         return Err(client);
     }
-    let workers = worker_domains();
-    if workers.is_empty() {
+    let configured = worker_domains();
+    if configured.is_empty() {
         log::warn!("[{label}] worker passthrough skipped (no CF_WORKER_DOMAIN)");
+        return Err(client);
+    }
+    // Skip Workers that are serving 429s. Without this, every connection
+    // re-dialled every Worker while Cloudflare was already rate-limiting them,
+    // which spent more of the (possibly exhausted) daily quota, added the full
+    // connect timeout to each session and flooded syslog with 429 warnings.
+    let (workers, cooling) = usable_workers(configured);
+    if workers.is_empty() {
+        log::debug!(
+            "[{label}] worker passthrough skipped ({cooling} worker(s) rate-limited) -> front fallback"
+        );
         return Err(client);
     }
     let port = if orig_port == 0 { 443 } else { orig_port };
@@ -1002,6 +1029,7 @@ async fn try_worker_passthrough(
         .await
         {
             Ok(Ok(ws)) => {
+                clear_worker_429(worker);
                 match relay_via_worker(client, ws, initial, label, worker, dst_ip, port).await {
                     Ok(()) => return Ok(()),
                     Err(returned_client) => {
@@ -1011,7 +1039,11 @@ async fn try_worker_passthrough(
                 }
             }
             Ok(Err(e)) => {
-                log::warn!("[{label}] worker passthrough {worker} -> {dst_ip}:{port} failed: {e}");
+                mark_worker_429(worker, &e);
+                log::warn!(
+                    "[{label}] worker passthrough {worker} -> {dst_ip}:{port} failed: {}",
+                    e.into_io()
+                );
             }
             Err(_) => {
                 log::warn!("[{label}] worker passthrough {worker} -> {dst_ip}:{port} timeout");

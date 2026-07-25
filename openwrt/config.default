@@ -99,6 +99,21 @@ FRONT_IP="149.154.167.220"
 # WRTG_WS_FAIL_TIMEOUT_SEC="5"             # normal timeout (default 5)
 # WRTG_WS_FAIL_TIMEOUT_FAST_SEC="2"        # fast timeout after DC fail (default 2)
 
+# CF Worker HTTP 429 cooldown (exponential backoff per Worker).
+# Cloudflare answers 429 when a Worker is rate limited — and on the free plan
+# once its daily request quota (100k/day per account) is spent, for the rest of
+# the UTC day. A Worker that returns 429 is skipped until its cooldown expires,
+# so wrtg stops spending quota it no longer has and falls straight through to
+# the next path. Defaults are longer than the CF-proxy ones because a spent
+# quota only resets at 00:00 UTC — probing every 45s would be pointless.
+# WRTG_CF_WORKER_429_COOLDOWN_SEC="60"       # initial cooldown (seconds)
+# WRTG_CF_WORKER_429_MAX_COOLDOWN_SEC="900"  # max cooldown (seconds)
+#
+# Tip: the CF Worker pool (WRTG_CF_WORKER_POOL_SIZE) keeps pre-established
+# connections warm per (DC, media) and refills them on a timer, which consumes
+# request quota even while idle. On the free plan keep the pool small (2) if you
+# see 429s; raise it only with a paid Workers plan or more Worker accounts.
+
 # CF proxy HTTP 429 cooldown (exponential backoff per domain)
 # WRTG_CFPROXY_429_COOLDOWN_SEC="45"       # initial cooldown (seconds)
 # WRTG_CFPROXY_429_MAX_COOLDOWN_SEC="300"  # max cooldown (seconds)
