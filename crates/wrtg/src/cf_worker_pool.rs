@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::cf_balancer::worker_domains_for_dc;
+use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429, usable_workers};
 use crate::conn_pool::{ConnectFuture, Key, Pool};
 use crate::mtproto::{dc_default_ip, ws_target_ip};
 use crate::ws::{connect_cf_worker_ws, RawWebSocket};
@@ -66,7 +67,11 @@ fn dst_ip(dc: i32, orig_hint: &str) -> String {
 
 fn connect(dc: i32, _is_media: bool, hint: String) -> ConnectFuture {
     Box::pin(async move {
-        let workers = worker_domains_for_dc(dc);
+        // Rate-limited Workers are skipped: the pool refills in the background
+        // on a timer, so without this it kept spending request quota against
+        // Workers that were already answering 429 — the single largest source
+        // of idle quota burn once Cloudflare starts limiting.
+        let (workers, _cooling) = usable_workers(worker_domains_for_dc(dc));
         if workers.is_empty() {
             return None;
         }
@@ -83,8 +88,14 @@ fn connect(dc: i32, _is_media: bool, hint: String) -> ConnectFuture {
             )
             .await
             {
-                Ok(Ok(ws)) => return Some((ws, worker.clone())),
-                Ok(Err(e)) => log::debug!("cf worker pool: DC{dc} {worker} failed: {e}"),
+                Ok(Ok(ws)) => {
+                    clear_worker_429(worker);
+                    return Some((ws, worker.clone()));
+                }
+                Ok(Err(e)) => {
+                    mark_worker_429(worker, &e);
+                    log::debug!("cf worker pool: DC{dc} {worker} failed: {}", e.into_io());
+                }
                 Err(_) => log::debug!("cf worker pool: DC{dc} {worker} timeout"),
             }
         }
