@@ -255,7 +255,9 @@ verify_local() {
 }
 
 summary() {
-	CFW="$(sed -n 's/^CF_WORKER_DOMAIN="\(.*\)"/\1/p' "$ETC/config" 2>/dev/null)"
+	# The config is shell-sourced, so the value may be quoted or bare; strip
+	# either (and a CRLF tail) instead of only matching the quoted form.
+	CFW="$(sed -n 's/^CF_WORKER_DOMAIN=//p' "$ETC/config" 2>/dev/null | tr -d '\042\047\r' | head -n1)"
 	say ""
 	say "${C_G}${C_B}wrtg $VERSION installed.${C_0}"
 	say "  ${C_D}Config${C_0}  $ETC/config"
