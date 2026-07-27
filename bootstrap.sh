@@ -9,8 +9,6 @@
 # Options (env):
 #   VER=v0.5.5        Install a specific release instead of the latest
 #   WRTG_REPO=o/r     GitHub repo to install from (default: onebany/wrtg)
-#   WRTG_BASE_URL=    Install from a self-hosted Gitea host instead of GitHub
-#                     (Gitea-style API; alias: WRTG_RELEASE_URL)
 #   WRTG_INSECURE=1   Allow unverified installs: downgrade a missing sha256sum
 #                     tool / SHA256SUMS to a warning AND permit the unverified
 #                     binary+source fallback (not recommended)
@@ -19,7 +17,6 @@
 
 set -e
 
-BASE="${WRTG_BASE_URL:-${WRTG_RELEASE_URL:-}}"
 WRTG_REPO="${WRTG_REPO:-onebany/wrtg}"
 VER="${VER:-latest}"
 BUNDLE="wrtg-openwrt.tar.gz"
@@ -46,24 +43,7 @@ fetch_optional() { # url dest — returns 0 on success, 1 on 404/missing
 	else return 1; fi
 }
 
-github_mode() { [ -z "$BASE" ]; } # GitHub unless a custom base URL is given
-
-release_base() {
-	if github_mode; then
-		printf 'https://github.com/%s' "${WRTG_REPO:-onebany/wrtg}"
-	else
-		printf '%s' "${BASE%/}"
-	fi
-}
-
-gitea_api_base() {
-	# https://host/owner/repo -> https://host/api/v1/repos/owner/repo
-	_host="${BASE#*://}"
-	_host="${_host%%/*}"
-	_path="${BASE#*://}"
-	_path="${_path#*/}"
-	printf 'https://%s/api/v1/repos/%s' "$_host" "$_path"
-}
+release_base() { printf 'https://github.com/%s' "$WRTG_REPO"; }
 
 parse_tag_name() { # json_file -> echoes tag
 	_tag="$(grep '"tag_name"' "$1" 2>/dev/null | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
@@ -83,21 +63,12 @@ resolve_latest_github_atom() {
 }
 
 resolve_latest_ver() {
-	_rb="$(release_base)"
-	if github_mode; then
-		# Prefer the atom feed (no API rate limit); fall back to the REST API.
-		_tag="$(resolve_latest_github_atom)"
-		[ -n "$_tag" ] && { printf '%s' "$_tag"; return 0; }
-		_api="https://api.github.com/repos/${WRTG_REPO:-onebany/wrtg}/releases/latest"
-	else
-		_api="$(gitea_api_base)/releases/latest"
-	fi
+	# Prefer the atom feed (no API rate limit); fall back to the REST API.
+	_tag="$(resolve_latest_github_atom)"
+	[ -n "$_tag" ] && { printf '%s' "$_tag"; return 0; }
+	_api="https://api.github.com/repos/$WRTG_REPO/releases/latest"
 	if ! fetch_optional "$_api" "$TMP/latest.json"; then
-		if github_mode; then
-			err "cannot resolve latest release (atom feed and API both failed) — pass an explicit VER=vX.Y.Z"
-		else
-			err "cannot resolve latest release from $_api"
-		fi
+		err "cannot resolve latest release (atom feed and API both failed) — pass an explicit VER=vX.Y.Z"
 	fi
 	_tag="$(parse_tag_name "$TMP/latest.json" | tr -d '\r')"
 	[ -n "$_tag" ] || err "latest release tag not found in API response"
@@ -116,7 +87,7 @@ bundle_url() { # ver bundle_name
 	_rb="$(release_base)"
 	_raw="$1"
 	_file="$2"
-	if github_mode && [ "$_raw" = "latest" ]; then
+	if [ "$_raw" = "latest" ]; then
 		printf '%s/releases/latest/download/%s' "$_rb" "$_file"
 	else
 		_ver="$(normalize_ver "$_raw")"
@@ -125,13 +96,7 @@ bundle_url() { # ver bundle_name
 }
 
 archive_url() { # ver
-	_rb="$(release_base)"
-	_ver="$(normalize_ver "$1")"
-	if github_mode; then
-		printf '%s/archive/refs/tags/%s.tar.gz' "$_rb" "$_ver"
-	else
-		printf '%s/archive/%s.tar.gz' "$_rb" "$_ver"
-	fi
+	printf '%s/archive/refs/tags/%s.tar.gz' "$(release_base)" "$(normalize_ver "$1")"
 }
 
 detect_arch() {
@@ -236,12 +201,7 @@ if [ "$VER" = "latest" ]; then
 	echo "wrtg: latest release is $VER"
 fi
 
-_src="$(release_base)"
-if github_mode; then
-	echo "wrtg: GitHub releases ($WRTG_REPO) $VER"
-else
-	echo "wrtg: Gitea releases ($_src) $VER"
-fi
+echo "wrtg: GitHub releases ($WRTG_REPO) $VER"
 
 if install_from_bundle "$VER"; then
 	:

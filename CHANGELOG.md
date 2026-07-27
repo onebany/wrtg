@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.34 - 2026-07-27
+
+### Changed
+- **GitHub-only release/install path** — the installer and CI carried a second
+  code path for a self-hosted forge (a custom base URL, its own API resolver,
+  and an optional release-mirror job) left over from before the project moved
+  to GitHub. Nothing used it, so it is gone: `bootstrap.sh` resolves and
+  downloads GitHub releases only (`WRTG_REPO` still selects the repo), and
+  `release.yml` publishes the GitHub release only. Installing without GitHub
+  access from the router is still possible — see the offline install in README.
+
 ## 0.5.33 - 2026-07-25
 
 ### Fixed
@@ -167,9 +178,9 @@
   `openwrt/check-cidr-sync.sh` that fails if the Worker's hardcoded
   `TELEGRAM_CIDRS` drifts from the router-side `default_cidrs()` in `lib.sh`.
 - **Dependabot** — weekly grouped updates for Cargo deps and GitHub Actions.
-- **Optional Gitea release mirror** — `release.yml` can also publish the
-  binaries, bundle, `SHA256SUMS`, and `bootstrap.sh` to the Gitea host that the
-  default install path uses; runs only when a `GITEA_TOKEN` secret is set.
+- **Optional release mirror** — `release.yml` could also publish the binaries,
+  bundle, `SHA256SUMS`, and `bootstrap.sh` to a second, self-hosted forge.
+  (Removed in 0.5.34 — releases are published to GitHub only.)
 
 ### Changed
 - **Connection cap** — the accept loop now bounds simultaneously-served
@@ -357,12 +368,11 @@
 ## 0.5.5 — 2026-07-10
 
 ### Changed
-- **`bootstrap.sh`** — installs GitHub releases by default (`WRTG_REPO=owner/repo`);
-  `WRTG_BASE_URL` / `WRTG_RELEASE_URL` point it at a self-hosted Gitea instead.
+- **`bootstrap.sh`** — installs GitHub releases (`WRTG_REPO=owner/repo`).
   Falls back to release binary + source archive when `wrtg-openwrt.tar.gz` is missing.
 - **Install docs** — README and `docs/GUIDE.md` list canonical paths: bootstrap one-liner,
   `ROUTER=… install.sh`, daemon-only update, `SKIP_BUILD=1` without Rust.
-- **`make bundle`** — local OpenWrt install bundle + SHA256SUMS (for Gitea/GitHub uploads).
+- **`make bundle`** — local OpenWrt install bundle + SHA256SUMS (for release uploads).
 - **`make install-amd64`** — single-arch local install without building arm targets.
 - **`install.sh`** — LAN_IF prompt default is auto-detect (empty), not `eth0`.
 
