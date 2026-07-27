@@ -74,7 +74,7 @@ wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 
 Поддерживаемые CPU: `x86_64`, `aarch64`, `armv7`, `mipsel` (mips32r2, напр. MT7621 — Xiaomi Mi Router 3G). Big-endian MIPS не поддерживается.
 
-Опции через env: `VER=v0.5.22`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `WRTG_BASE_URL=` (self-hosted Gitea), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
+Опции через env: `VER=v0.5.33`, `WRTG_REPO=owner/repo` (другой GitHub-репо), `ASSUME_YES=1`, `SKIP_LUCI=1`, `CF_WORKER_DOMAIN=…`.
 
 ### Офлайн-установка (GitHub недоступен с роутера)
 

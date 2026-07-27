@@ -147,12 +147,6 @@ jobs:
     name: Create GitHub Release
     needs: [build, build-mipsel]
     runs-on: ubuntu-latest
-    env:
-      # Optional: to also mirror the release to a self-hosted Gitea, set BOTH the
-      # `GITEA_TOKEN` repo secret and the `GITEA_API` repo variable (the releases
-      # API base, e.g. https://gitea.example/api/v1/repos/owner/repo). If either
-      # is unset the Gitea step is skipped and only the GitHub release is created.
-      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -186,33 +180,6 @@ jobs:
             dist/wrtg-openwrt.tar.gz
             bootstrap.sh
             dist/SHA256SUMS
-
-      # Optional mirror to a self-hosted Gitea. Runs only when both GITEA_TOKEN
-      # (secret) and GITEA_API (variable) are set, so it never affects the
-      # GitHub-only flow and hardcodes no host.
-      - name: Publish to Gitea
-        if: ${{ env.GITEA_TOKEN != '' && env.GITEA_API != '' }}
-        env:
-          GITEA_API: ${{ vars.GITEA_API }}
-        run: |
-          set -eu
-          TAG="${GITHUB_REF#refs/tags/}"
-          auth="Authorization: token $GITEA_TOKEN"
-          # Reuse the release for this tag if it already exists, else create it.
-          rid="$(curl -fsSL -H "$auth" "$GITEA_API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
-          if [ -z "$rid" ]; then
-            rid="$(curl -fsSL -X POST -H "$auth" -H 'Content-Type: application/json' \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" \
-              "$GITEA_API/releases" | jq -r '.id')"
-          fi
-          for f in dist/wrtg-linux-amd64 dist/wrtg-linux-arm64 dist/wrtg-linux-arm \
-                   dist/wrtg-openwrt.tar.gz dist/SHA256SUMS bootstrap.sh; do
-            name="$(basename "$f")"
-            curl -fsSL -X POST -H "$auth" \
-              -F "attachment=@$f;filename=$name" \
-              "$GITEA_API/releases/$rid/assets?name=$name" >/dev/null
-            echo "uploaded $name to Gitea release $TAG"
-          done
 
   # Keep the "**Version:** X · **Last updated:** Y" line in README.md in sync
   # with the release tag, so it never goes stale. Commits back to main.
