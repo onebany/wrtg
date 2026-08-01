@@ -79,7 +79,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.4
         with:
           tool: cargo-zigbuild
 
