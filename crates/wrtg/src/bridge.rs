@@ -12,7 +12,7 @@ use crate::cf_balancer::{
     worker_domains_for_dc, worker_passthrough_disabled,
 };
 use crate::cf_proxy::try_cf_proxy_domain;
-use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429, usable_workers};
+use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429_with_peers, usable_workers};
 use crate::cf_worker_pool::{acquire as acquire_cf_worker, schedule_refill as schedule_cf_refill};
 use crate::fronting::{
     clear_fronting_fail, mark_fronting_failed, should_skip_fronting, try_ws_fronting,
@@ -678,7 +678,7 @@ pub async fn try_cf_fallback(
                 return CfBridgeResult::Connected;
             }
             Ok(Err(e)) => {
-                mark_worker_429(&worker, &e);
+                mark_worker_429_with_peers(&worker, &e, &worker_domains_for_dc(hs.dc));
                 log::warn!(
                     "[{label}] DC{} CF worker {worker} failed: {}",
                     hs.dc,
@@ -1006,7 +1006,7 @@ async fn try_worker_passthrough(
     // re-dialled every Worker while Cloudflare was already rate-limiting them,
     // which spent more of the (possibly exhausted) daily quota, added the full
     // connect timeout to each session and flooded syslog with 429 warnings.
-    let (workers, cooling) = usable_workers(configured);
+    let (workers, cooling) = usable_workers(configured.clone());
     if workers.is_empty() {
         log::debug!(
             "[{label}] worker passthrough skipped ({cooling} worker(s) rate-limited) -> front fallback"
@@ -1039,7 +1039,7 @@ async fn try_worker_passthrough(
                 }
             }
             Ok(Err(e)) => {
-                mark_worker_429(worker, &e);
+                mark_worker_429_with_peers(worker, &e, &configured);
                 log::warn!(
                     "[{label}] worker passthrough {worker} -> {dst_ip}:{port} failed: {}",
                     e.into_io()

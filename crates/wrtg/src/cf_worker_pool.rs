@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::cf_balancer::worker_domains_for_dc;
-use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429, usable_workers};
+use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429_with_peers, usable_workers};
 use crate::conn_pool::{ConnectFuture, Key, Pool};
 use crate::mtproto::{dc_default_ip, ws_target_ip};
 use crate::ws::{connect_cf_worker_ws, RawWebSocket};
@@ -93,7 +93,7 @@ fn connect(dc: i32, _is_media: bool, hint: String) -> ConnectFuture {
                     return Some((ws, worker.clone()));
                 }
                 Ok(Err(e)) => {
-                    mark_worker_429(worker, &e);
+                    mark_worker_429_with_peers(worker, &e, &worker_domains_for_dc(dc));
                     log::debug!("cf worker pool: DC{dc} {worker} failed: {}", e.into_io());
                 }
                 Err(_) => log::debug!("cf worker pool: DC{dc} {worker} timeout"),

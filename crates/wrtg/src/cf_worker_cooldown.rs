@@ -70,6 +70,54 @@ pub fn mark_worker_429(worker: &str, err: &WsConnectError) {
     );
 }
 
+/// Cloudflare account key of a `*.workers.dev` hostname:
+/// `<account-subdomain>.workers.dev`. Anything else (custom domains) has no
+/// derivable account, so `None` keeps its cooldown strictly per-host.
+fn account_key(host: &str) -> Option<String> {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let rest = host.strip_suffix(".workers.dev")?;
+    let account = rest.rsplit('.').next().unwrap_or("");
+    if account.is_empty() {
+        return None;
+    }
+    Some(format!("{account}.workers.dev"))
+}
+
+/// Record a 429 from `worker` and cool down every configured sibling on the
+/// same Cloudflare account without dialling them first.
+///
+/// The Workers Free plan daily request quota is per *account* (100k requests
+/// across all Workers, error 1027 served as HTTP 429), so once one
+/// `*.workers.dev` sibling is spent, the rest answer 429 too. Dialling them
+/// anyway — which the per-worker-only cooldown did on every cooldown expiry —
+/// burned more of the missing quota and added a doomed handshake to each
+/// connection. Workers on other accounts (or custom domains) keep their own
+/// independent cooldown.
+pub fn mark_worker_429_with_peers(worker: &str, err: &WsConnectError, peers: &[String]) {
+    if err.http_status() != Some(429) {
+        return;
+    }
+    mark_worker_429(worker, err);
+    let Some(account) = account_key(worker) else {
+        return;
+    };
+    let mut cooled = 0usize;
+    for peer in peers {
+        if peer.eq_ignore_ascii_case(worker) || worker_rate_limited(peer) {
+            continue;
+        }
+        if account_key(peer).as_deref() == Some(account.as_str()) {
+            CF_WORKER_429.mark(peer, err);
+            cooled += 1;
+        }
+    }
+    if cooled > 0 {
+        log::warn!(
+            "CF worker 429 is account-wide ({account}) — cooled {cooled} sibling worker(s) without dialling them"
+        );
+    }
+}
+
 /// A Worker answered normally again — drop any cooldown it had.
 pub fn clear_worker_429(worker: &str) {
     CF_WORKER_429.clear(worker);
@@ -130,5 +178,58 @@ mod tests {
         assert_eq!(usable, vec![a.clone()]);
         assert_eq!(cooling, 1);
         clear_worker_429(&b);
+    }
+
+    #[test]
+    fn account_key_groups_workers_dev_hosts() {
+        assert_eq!(
+            account_key("square-thunder-aa06.maybebany.workers.dev").as_deref(),
+            Some("maybebany.workers.dev")
+        );
+        assert_eq!(
+            account_key("Proud-Surf-5CFE.maybebany.workers.dev.").as_deref(),
+            Some("maybebany.workers.dev")
+        );
+        // Custom domains carry no derivable account.
+        assert_eq!(account_key("tg.example.com"), None);
+        assert_eq!(account_key("workers.dev"), None);
+        assert_eq!(account_key(""), None);
+    }
+
+    #[test]
+    fn peer_429_cools_same_account_siblings_only() {
+        let w1 = "w1.acct-a.workers.dev".to_string();
+        let w2 = "w2.acct-a.workers.dev".to_string();
+        let other_acct = "w1.acct-b.workers.dev".to_string();
+        let custom = "relay.example.com".to_string();
+        for w in [&w1, &w2, &other_acct, &custom] {
+            clear_worker_429(w);
+        }
+        let peers = vec![w1.clone(), w2.clone(), other_acct.clone(), custom.clone()];
+        mark_worker_429_with_peers(&w1, &handshake_err(429), &peers);
+        assert!(worker_rate_limited(&w1));
+        assert!(worker_rate_limited(&w2), "same-account sibling must cool");
+        assert!(
+            !worker_rate_limited(&other_acct),
+            "other account keeps its own cooldown"
+        );
+        assert!(
+            !worker_rate_limited(&custom),
+            "custom domain keeps its own cooldown"
+        );
+        for w in [&w1, &w2, &other_acct, &custom] {
+            clear_worker_429(w);
+        }
+    }
+
+    #[test]
+    fn peer_non_429_marks_nothing() {
+        let w1 = "n1.acct-c.workers.dev".to_string();
+        let w2 = "n2.acct-c.workers.dev".to_string();
+        clear_worker_429(&w1);
+        clear_worker_429(&w2);
+        mark_worker_429_with_peers(&w1, &handshake_err(502), &[w1.clone(), w2.clone()]);
+        assert!(!worker_rate_limited(&w1));
+        assert!(!worker_rate_limited(&w2));
     }
 }
