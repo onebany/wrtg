@@ -7,6 +7,8 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::conn_pool::{ConnectFuture, Key, Pool};
+use crate::fronting::clear_fronting_fail;
+use crate::ip_fail::{clear_dc_fail, clear_ip_fail};
 use crate::mtproto::{dc_front_ip, ws_domains, ws_target_ip};
 use crate::ws::{connect_ws, RawWebSocket};
 
@@ -71,13 +73,29 @@ fn connect(dc: i32, is_media: bool, hint: String) -> ConnectFuture {
             )
             .await
             {
-                Ok(Ok(ws)) => return Some((ws, domain)),
+                Ok(Ok(ws)) => {
+                    note_connect_success(&target, dc, is_media);
+                    return Some((ws, domain));
+                }
                 Ok(Err(e)) => log::debug!("ws pool: DC{dc} {domain} failed: {e}"),
                 Err(_) => log::debug!("ws pool: DC{dc} {domain} timeout"),
             }
         }
         None
     })
+}
+
+/// A successful pool dial is direct-WS success evidence, so it lifts the skip
+/// state exactly like the session path does (bridge.rs clears the same trio
+/// on a pooled/direct connect). Without this the skip was sticky: the session
+/// path gates `try_ws_bridge` on `should_skip_ws`, so nothing could clear the
+/// flag while it was active — one transient WS timeout degraded the DC for
+/// the whole ip_fail TTL even though the pool kept dialling (and succeeding)
+/// in the background, and only a daemon restart restored the fast path.
+fn note_connect_success(target: &str, dc: i32, is_media: bool) {
+    clear_ip_fail(target, dc);
+    clear_dc_fail(dc, is_media);
+    clear_fronting_fail(target, dc);
 }
 
 // Direct WS is served non-media only (media goes straight to the fallback ladder).
@@ -147,5 +165,28 @@ mod tests {
     #[test]
     fn seeds_never_exceed_the_dc_range() {
         assert!(seeds().len() <= 5);
+    }
+
+    #[test]
+    fn pool_connect_success_lifts_skip_state() {
+        // The skip maps are process-global. Use keys no other test touches and
+        // clean up after ourselves instead of reset_all(), so we neither race
+        // nor depend on the ip_fail/fronting test locks.
+        let (ip, dc) = ("203.0.113.254", 203);
+        crate::ip_fail::mark_ip_failed(ip, dc);
+        crate::ip_fail::mark_dc_failed(dc, false);
+        crate::fronting::mark_fronting_failed(ip, dc);
+        assert!(crate::ip_fail::should_skip_direct_ws(ip, dc));
+        // NB: fronting's skip isn't observable here — should_skip_fronting is
+        // true whenever WRTG_FRONTING_SNI is unset, regardless of the map.
+
+        note_connect_success(ip, dc, false);
+
+        assert!(!crate::ip_fail::should_skip_direct_ws(ip, dc));
+        // dc_fail lifts the adaptive fast timeout back to normal.
+        assert_eq!(
+            crate::ip_fail::ws_connect_timeout(dc, false),
+            crate::ip_fail::ws_connect_timeout(4, false)
+        );
     }
 }
