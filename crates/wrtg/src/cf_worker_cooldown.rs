@@ -1,4 +1,4 @@
-//! Per-CF-Worker HTTP 429 cooldown with exponential backoff.
+//! Per-CF-Worker HTTP 429/503 cooldown with exponential backoff.
 //! Thin wiring over [`crate::cooldown429::Cooldown429`].
 //!
 //! Cloudflare rate-limits a Worker (and, on the free plan, cuts it off for the
@@ -6,6 +6,14 @@
 //! a cooldown every new client connection re-dialled every configured Worker,
 //! which burned more quota while already over budget, added the full connect
 //! latency to each session, and buried the syslog ring buffer in 429 warnings.
+//!
+//! HTTP 503 gets the same treatment: the Worker script serves it when its
+//! `WRTG_TOKEN` secret is not configured (fail-closed against open-relay
+//! abuse), which is a persistent deployment fault, not a transient error —
+//! yet every connection kept re-dialling the Worker, paying a doomed WSS
+//! handshake per session before falling back. Other 5xx are excluded on
+//! purpose: the script's 502 means "upstream DC connect failed", which is
+//! specific to the requested `dst`, not to the Worker.
 //!
 //! Defaults are deliberately longer than the CF-proxy ones: a 429 here is
 //! usually a spent daily quota that only resets at 00:00 UTC, so probing every
@@ -47,14 +55,15 @@ fn max_cooldown() -> Duration {
 }
 
 static CF_WORKER_429: Cooldown429 = Cooldown429::new(base_cooldown, max_cooldown, "CF worker");
+static CF_WORKER_503: Cooldown429 = Cooldown429::new(base_cooldown, max_cooldown, "CF worker");
 
-/// Is this Worker currently rate-limited (429) and best skipped?
+/// Is this Worker currently best skipped (429 quota / 503 misconfiguration)?
 pub fn worker_rate_limited(worker: &str) -> bool {
-    CF_WORKER_429.is_active(worker)
+    CF_WORKER_429.is_active(worker) || CF_WORKER_503.is_active(worker)
 }
 
 pub fn worker_cooldown_remaining(worker: &str) -> Duration {
-    CF_WORKER_429.remaining(worker)
+    CF_WORKER_429.remaining(worker).max(CF_WORKER_503.remaining(worker))
 }
 
 /// Record a 429 from `worker`. Ignores every other failure: a timeout or a
@@ -83,8 +92,8 @@ fn account_key(host: &str) -> Option<String> {
     Some(format!("{account}.workers.dev"))
 }
 
-/// Record a 429 from `worker` and cool down every configured sibling on the
-/// same Cloudflare account without dialling them first.
+/// Record a 429 (or 503) from `worker`; a 429 also cools every configured
+/// sibling on the same Cloudflare account without dialling them first.
 ///
 /// The Workers Free plan daily request quota is per *account* (100k requests
 /// across all Workers, error 1027 served as HTTP 429), so once one
@@ -94,6 +103,18 @@ fn account_key(host: &str) -> Option<String> {
 /// connection. Workers on other accounts (or custom domains) keep their own
 /// independent cooldown.
 pub fn mark_worker_429_with_peers(worker: &str, err: &WsConnectError, peers: &[String]) {
+    // 503 (Worker running without its WRTG_TOKEN secret) is a persistent
+    // deployment fault: cool just this Worker, not its account siblings —
+    // unlike the account-wide 429 quota, the secret is set per Worker. Peer
+    // workers still get filtered by their own cooldowns via `usable_workers`.
+    if err.http_status() == Some(503) {
+        CF_WORKER_503.mark(worker, err);
+        log::warn!(
+            "CF worker {worker} answered HTTP 503 (misconfigured?) — skipping it for {}s",
+            CF_WORKER_503.remaining(worker).as_secs().max(1)
+        );
+        return;
+    }
     if err.http_status() != Some(429) {
         return;
     }
@@ -121,6 +142,7 @@ pub fn mark_worker_429_with_peers(worker: &str, err: &WsConnectError, peers: &[S
 /// A Worker answered normally again — drop any cooldown it had.
 pub fn clear_worker_429(worker: &str) {
     CF_WORKER_429.clear(worker);
+    CF_WORKER_503.clear(worker);
 }
 
 /// Split `workers` into the ones usable now and the count on cooldown, so
@@ -231,5 +253,43 @@ mod tests {
         mark_worker_429_with_peers(&w1, &handshake_err(502), &[w1.clone(), w2.clone()]);
         assert!(!worker_rate_limited(&w1));
         assert!(!worker_rate_limited(&w2));
+    }
+
+    #[test]
+    fn http_503_cools_the_worker() {
+        let w = "svc503.example".to_string();
+        clear_worker_429(&w);
+        mark_worker_429_with_peers(&w, &handshake_err(503), &[w.clone()]);
+        assert!(worker_rate_limited(&w), "503 must cool the worker");
+        assert!(worker_cooldown_remaining(&w) > Duration::ZERO);
+        clear_worker_429(&w);
+        assert!(!worker_rate_limited(&w), "clear must drop the 503 cooldown");
+    }
+
+    #[test]
+    fn http_503_does_not_cool_siblings() {
+        let w1 = "s1.acct-d.workers.dev".to_string();
+        let w2 = "s2.acct-d.workers.dev".to_string();
+        clear_worker_429(&w1);
+        clear_worker_429(&w2);
+        mark_worker_429_with_peers(&w1, &handshake_err(503), &[w1.clone(), w2.clone()]);
+        assert!(worker_rate_limited(&w1));
+        assert!(
+            !worker_rate_limited(&w2),
+            "503 is a per-worker fault, siblings stay usable"
+        );
+        clear_worker_429(&w1);
+    }
+
+    #[test]
+    fn other_5xx_marks_nothing() {
+        // 502 is the Worker script's "upstream DC connect failed" — specific
+        // to the requested dst, not to the Worker; cooling would punish the
+        // Worker for one bad target.
+        let w = "svc502.example".to_string();
+        clear_worker_429(&w);
+        mark_worker_429_with_peers(&w, &handshake_err(502), &[w.clone()]);
+        mark_worker_429_with_peers(&w, &handshake_err(500), &[w.clone()]);
+        assert!(!worker_rate_limited(&w));
     }
 }
