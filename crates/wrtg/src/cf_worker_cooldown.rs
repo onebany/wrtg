@@ -63,7 +63,9 @@ pub fn worker_rate_limited(worker: &str) -> bool {
 }
 
 pub fn worker_cooldown_remaining(worker: &str) -> Duration {
-    CF_WORKER_429.remaining(worker).max(CF_WORKER_503.remaining(worker))
+    CF_WORKER_429
+        .remaining(worker)
+        .max(CF_WORKER_503.remaining(worker))
 }
 
 /// Record a 429 from `worker`. Ignores every other failure: a timeout or a
