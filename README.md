@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 0.5.34 · **Last updated:** 2026-07-27
+**Version:** 0.5.34 · **Last updated:** 2026-08-05
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
@@ -20,7 +20,7 @@
 - [Установка](#установка)
 - [Настройка](#настройка)
 - [CF Worker](#cf-worker)
-- [CF Proxy (opt-in)](#cf-proxy-opt-in)
+- [CF Proxy](#cf-proxy)
 - [Диагностика](#диагностика)
 - [Ограничения](#ограничения)
 - [Как это работает](#как-это-работает) — архитектура, поток соединения, модули
@@ -31,13 +31,13 @@
 
 ## Возможности
 
-- **Полная прозрачность** — nftables DNAT перехватывает TCP к IP Telegram (80/443/5222); клиенты ничего не знают о прокси.
-- **Умная fallback-цепочка** — direct WS pool → direct WS → TLS fronting → CF Worker → CF Proxy → TCP → blind relay, с blacklist/cooldown на каждом шаге.
-- **CF Worker** — обход HTTP 302 на DC1/DC3/DC5 и туннель media/CDN; свой Worker на бесплатном плане Cloudflare.
-- **Self-learning** — демон сам запоминает, какой IP к какому DC относится (`dc_learn`).
-- **LuCI-приложение** — статус, настройки, логи, документация и обновление в один клик из веб-интерфейса роутера.
-- **Один статический бинарник** (~3 МБ, ~4 МБ RAM), без зависимостей: `x86_64`, `aarch64`, `armv7`, `mipsel` (MT7621, напр. Xiaomi Mi Router 3G).
-- **Безопасность по умолчанию** — проверка sha256 при установке, токен на Worker, лимиты соединений и таймауты против DoS.
+- **Прозрачный перехват.** nftables DNAT забирает TCP к IP Telegram (80/443/5222). Клиенты о прокси не знают.
+- **Цепочка запасных путей:** direct WS pool → direct WS → TLS fronting → CF Worker → CF Proxy → TCP → blind relay. На каждой ступени свой blacklist и cooldown, так что мёртвый путь не пробуют заново.
+- **CF Worker и CF Proxy.** Фронт Telegram отвечает HTTP 302 на DC1, DC3 и DC5, поэтому им нужен туннель через Cloudflare. Worker вы поднимаете сами на бесплатном плане; CF Proxy работает из коробки на общем пуле доменов.
+- **Демон запоминает соответствие IP → DC** из handshake (`dc_learn`), а не полагается на зашитый список.
+- **LuCI-приложение:** статус, настройки, логи и обновление из веб-интерфейса роутера.
+- **Один статический бинарник** (~3 МБ, ~4 МБ RAM) без зависимостей: `x86_64`, `aarch64`, `armv7`, `mipsel` (MT7621, напр. Xiaomi Mi Router 3G).
+- **sha256 при установке, токен на Worker, лимиты соединений и таймауты** против исчерпания ресурсов.
 
 ---
 
@@ -56,9 +56,9 @@ wget -qO- https://raw.githubusercontent.com/onebany/wrtg/main/bootstrap.sh | sh
 wrtg --check          # DNS + WSS probes; exit 0 = OK
 ```
 
-Откройте Telegram в LAN — в логах (`logread -e wrtg`) появится `direct handshake OK` или `WS connected`. Клиентам ничего настраивать не нужно.
+Откройте Telegram в LAN. В логах (`logread -e wrtg`) появится `direct handshake OK` или `WS connected`. Клиентам ничего настраивать не нужно.
 
-Если DC1/DC3/DC5 отвечают HTTP 302 на direct WS (частая ситуация) — настройте [CF Worker](#cf-worker), это 5 минут.
+DC1, DC3 и DC5 почти всегда отвечают на direct WS редиректом HTTP 302: фронт Telegram их не обслуживает. Эти DC подхватит [CF Proxy](#cf-proxy) на общем пуле доменов, он включён по умолчанию. Свой [CF Worker](#cf-worker) быстрее и не зависит от чужих доменов.
 
 ---
 
@@ -102,7 +102,7 @@ SKIP_BUILD=1 sh wrtg/install.sh
 ### Обновление
 
 - **LuCI**: Services → wrtg → Status → **Check for updates / Update**.
-- **CLI**: `/etc/wrtg/check-update.sh update` или просто повторить команду установки.
+- **CLI**: `/etc/wrtg/check-update.sh update` либо повторите команду установки.
 
 Конфиг и learned DC-карта при обновлении сохраняются.
 
@@ -246,9 +246,9 @@ WRTG_CF_WORKER_TOKEN="<то же значение>"
 
 ---
 
-## CF Proxy (opt-in)
+## CF Proxy
 
-**CF Proxy** — WSS fallback через домен за Cloudflare CDN. Предпочтительнее собственный CF Worker.
+WSS-туннель через домен, спрятанный за Cloudflare CDN. Это последняя ступень перед blind relay и единственный путь, который остаётся у DC1, DC3 и DC5, когда своего Worker нет.
 
 ### Свой домен
 
@@ -259,18 +259,18 @@ CF_PROXY_DOMAIN="proxy.example.com"
 
 wrtg подключается к `wss://kws{N}[-1].proxy.example.com/apiws`.
 
-### Публичный pool
+### Общий pool
 
-По умолчанию **выключен** — публичные списки доменов ненадёжны и могут быть заблокированы ISP.
+Работает по умолчанию, пока вы не задали свой `CF_PROXY_DOMAIN`. Список из 20 доменов зашит в бинарник и раз в час обновляется из репозитория Flowseal/tg-ws-proxy. На соединение wrtg берёт не больше трёх доменов: первый последовательно, остальные два параллельной гонкой.
+
+Домены чужие, и трафик DC1/DC3/DC5 пойдёт через них. Если это не устраивает, поднимите свой Worker или домен, либо выключите pool:
 
 ```sh
-WRTG_CFPROXY_AUTO="1"
+WRTG_CFPROXY_AUTO="0"
 /etc/init.d/wrtg restart
 ```
 
-Не более трёх доменов на соединение; список обновляется раз в час.
-
-Рекомендация: свой Worker или свой `CF_PROXY_DOMAIN`.
+Учтите, что после выключения DC1, DC3 и DC5 останутся без пути: их трафик уйдёт в blind relay на заблокированный IP. Демон предупредит об этом в логе при старте.
 
 ---
 
@@ -297,13 +297,16 @@ wrtg --stats
 ```
 
 ```text
-wrtg 0.5.30
+wrtg 0.5.34
 connections active=12 capacity=1024
 counters
   accepted 48213
   ws_pool_hit 30112
   cf_worker 8801
+  cf_proxy 512
+  cf_proxy_media 37
   worker_passthrough 4120
+  media_http_rejected 84
   all_paths_failed 3
   idle_reaped 17
   passthrough_no_data 0
@@ -316,7 +319,15 @@ cf worker pool
   DC3 4
 ```
 
-На что смотреть: `active` близко к `capacity` — семафор заканчивается (симптом зависания из 0.5.28); растущий `passthrough_no_data` — Worker поднимает туннель, но не доходит до DC; `all_paths_failed` — вся цепочка не сработала.
+Как читать:
+
+| Счётчик | О чём говорит |
+|---------|---------------|
+| `active` близко к `capacity` | Семафор соединений заканчивается (симптом зависания из 0.5.28). |
+| `all_paths_failed` растёт | Цепочка не сработала целиком. Считайте долю от суммы `ws_pool_hit + ws_direct + cf_proxy + tcp_fallback + all_paths_failed`; `blind_relay` для этого не годится, он растёт и на обычном не-MTProto трафике. |
+| `cf_proxy` = 0 при живом трафике | Ступень не используется. Проверьте `cf-proxies=N` в строке старта. |
+| `media_http_rejected` растёт | Фронт отвечает на media поверх MTProto-over-HTTP редиректом вместо данных. Картинки и стикеры будут грузиться вечно. |
+| `passthrough_no_data` растёт | Worker поднимает туннель, но до DC не доходит. |
 
 ### `wrtg --check`
 
@@ -346,7 +357,9 @@ curl -i https://kws1.proxy.example.com/apiws
 logread -e wrtg | grep -i 'CF proxy'
 ```
 
-При нестабильном публичном pool задайте `WRTG_CFPROXY_AUTO="0"` и используйте свой Worker или домен.
+Домены общего пула публикуют только поддомены `kws{N}.<домен>`. У самого домена A-записи нет, а media-хостов `kws{N}-1.<домен>` не существует, поэтому media через CF Proxy не ходит.
+
+Если pool нестабилен, задайте `WRTG_CFPROXY_AUTO="0"` и поднимите свой Worker или домен.
 
 ### Общие проблемы
 
@@ -354,8 +367,8 @@ logread -e wrtg | grep -i 'CF proxy'
 |---------|---------------|
 | Telegram не подключается | `wrtg --check`, nft rules, `ROUTER_IP`/`LAN_IF` |
 | HTTP 302 на WS | Настройте `CF_WORKER_DOMAIN` |
-| Media/CDN не грузятся | Worker passthrough (`CF_WORKER_DOMAIN`, не `WRTG_NO_WORKER_PASSTHROUGH`) |
-| Медленный fallback | Отключите `WRTG_CFPROXY_AUTO`, используйте свой Worker |
+| Media/CDN не грузятся | Сначала `media_http_rejected` в `--stats`. Растёт — фронт отдаёт редирект вместо данных, помочь может только живой Worker passthrough (`CF_WORKER_DOMAIN`, без `WRTG_NO_WORKER_PASSTHROUGH`) |
+| Медленный fallback | Задайте `WRTG_CFPROXY_AUTO="0"` и используйте свой Worker |
 | `passthrough_no_data` растёт в `--stats` | Клиент с собственным обходом DPI за wrtg — исключите его через `WRTG_SKIP_SRC` |
 | `curl: (28)` при установке | DPI провайдера дропает GitHub — [офлайн-установка](#офлайн-установка-github-недоступен-с-роутера) |
 
@@ -365,8 +378,9 @@ logread -e wrtg | grep -i 'CF proxy'
 
 - **Голос/видео** — UDP/WebRTC не проксируется; wrtg перехватывает только TCP (сигналинг).
 - **IPv4 only** — `SO_ORIGINAL_DST` работает только с IPv4.
-- **Worker deploy** — изменение `openwrt/cf-worker.js` требует отдельного deploy в Cloudflare.
-- **Публичный CF Proxy pool** — opt-in, не контролируется проектом.
+- **Worker deploy.** Изменив `openwrt/cf-worker.js`, вы должны выкатить его в Cloudflare отдельно.
+- **Общий CF Proxy pool** проектом не контролируется: домены чужие и могут отвалиться в любой момент.
+- **Media поверх MTProto-over-HTTP.** Клиент тянет часть медиа запросами `POST /api` на порт 80. Фронт Telegram отвечает на них HTTP 302 при любом значении `Host`, а CF Proxy и Worker обслуживают только `/apiws`. Рабочего пути для этого транспорта сейчас нет; счётчик `media_http_rejected` показывает, насколько часто это происходит.
 
 ---
 
@@ -416,7 +430,7 @@ flowchart TD
 2. **Direct WS** — новое WSS на `FRONT_IP` или реальный IP DC (`WRTG_FRONT_DCS`, `DC{N}_FRONT_IP`).
 3. **TLS fronting** — opt-in, cooldown после неудачи.
 4. **CF Worker pool / direct** — WSS через ваш Worker; несколько Worker — round-robin по DC, последовательные попытки.
-5. **CF Proxy** — WSS через свой домен или opt-in публичный pool (`WRTG_CFPROXY_AUTO=1`); до 3 доменов, второй и третий — параллельный race.
+5. **CF Proxy** — WSS через свой домен либо общий pool (по умолчанию включён, `WRTG_CFPROXY_AUTO="0"` выключает); до 3 доменов, второй и третий идут параллельной гонкой.
 6. **TCP fallback** — прямое TCP на FRONT_IP или media CDN.
 7. **blind relay** — если ничего не сработало или трафик не MTProto (сначала worker passthrough, затем front passthrough).
 
@@ -453,7 +467,7 @@ flowchart TD
 | **WSS** | WebSocket over TLS — `wss://kws{N}.web.telegram.org/apiws`. |
 | **FRONT_IP** | IP «фронта» Telegram (по умолчанию `149.154.167.220`); WS-подключение идёт сюда, Host остаётся `kws{N}.web.telegram.org`. |
 | **CF Worker** | Cloudflare Worker — serverless-скрипт на `*.workers.dev`; WSS/TCP fallback и media passthrough. |
-| **CF Proxy** | Домен за Cloudflare CDN (оранжевое облако); альтернативный WSS fallback через `wss://kws{N}.<domain>/apiws`. |
+| **CF Proxy** | Домен за Cloudflare CDN (оранжевое облако); WSS fallback через `wss://kws{N}.<domain>/apiws`. wrtg подключается именно к поддомену: у общего пула апексы без A-записи. |
 | **dc_learn** | Self-learning: из handshake запоминается соответствие `orig_ip → DC` в `dc-ips-learned.txt`. |
 | **Worker passthrough** | Туннель TLS/HTTP media через CF Worker к реальному `dst:port` Telegram. |
 | **TLS fronting** | Opt-in: TCP к целевому IP, SNI из `WRTG_FRONTING_SNI`, Host `kws{N}.web.telegram.org`. |

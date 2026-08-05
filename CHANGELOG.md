@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **CF Proxy never connected once** — `connect_cf_proxy_ws` built the `kws{N}.<base>` host for TLS and `Host`, then dialled the *base* domain instead. Same Cloudflare zone either way, so it reads as equivalent; it is not, because the shared pool proxies only the per-DC subdomains and leaves the apex without an A record. Every attempt died in the resolver before a packet left the box, on every domain, for every DC. Since the rung was also opt-in, its counter sat at zero and nobody looked. Measured on a router where DC1/DC3/DC5 have no other path (their IPs refuse TCP, the front answers 302, the Workers answer 503): `all_paths_failed` fell from 71% of bridge attempts to 23%, and to 0% once media stopped falling through.
+- **Media skipped the CF Proxy rung** — it tried `kws{N}-1.<base>` alone and gave up when that did not resolve. The shared pool publishes no `-1` hosts, so every media session walked past the rung. It now tries the CDN host, then the plain one. A 429 still aborts the base domain immediately: a rate-limited zone is rate-limited on both hosts.
+- **A stuck `ip_fail` flag survived a healthy pool** — one transient WS timeout marked the front IP, and the session path gated `try_ws_bridge` on `should_skip_ws`, so `clear_ip_fail` never ran while the flag was up. The degradation held for the full TTL (an hour by default) and lifted only on restart, while the background refill kept dialling the same IP successfully the whole time. A successful pool dial now lifts the flag.
+
+### Changed
+- **The shared CF Proxy pool is on by default**, unless you set a `CF_PROXY_DOMAIN` of your own. The domains are third-party and a stale one costs a fallback delay, which is the wrong trade against the alternative: on a stock install the front fronts DC2/DC4 only, so DC1, DC3 and DC5 had no path at all and blind-relayed into a TCP-blocked IP. Configured Workers do not suppress the pool — the rung sits below them in the chain and is reached only after every Worker has failed, and a Worker answering 503 is indistinguishable from none at all.
+- **The daemon names the stranded DCs at startup** when neither CF rung is configured. `--check` reported the gap, but nobody runs it by hand, and the startup line buried it as `cf-proxies=0`.
+
+### Added
+- **`cf_proxy_media` and `media_http_rejected` counters.** The first splits media out of `cf_proxy`, which lumped everything together. The second counts MTProto-over-HTTP media answered with a non-2xx: a packet capture shows Telegram pulling media over `POST /api` on port 80 and the front answering every one with 302 to `core.telegram.org`, for every `Host` tried, including the `kws{N}-1` rewrite this code exists to perform. The client waits on that redirect forever, which is the thumbnail that never loads. wrtg relayed those 302s without a word: `log_http_response` had the status all along, at debug level. The bytes still pass through unchanged.
+
 ## 0.5.34 - 2026-07-27
 
 ### Changed
