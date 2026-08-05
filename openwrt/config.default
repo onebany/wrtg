@@ -60,9 +60,9 @@ FRONT_IP="149.154.167.220"
 # Prefer CF_WORKER_DOMAIN or your own domain.
 # CF_PROXY_DOMAIN="your-domain.example.com"
 
-# Shared CF Proxy domain pool. Used automatically when no CF Worker and no
-# CF_PROXY_DOMAIN of your own is set — without it DC1/DC3/DC5 have no path at
-# all. Set to "0" to keep it off and blind-relay those DCs instead.
+# Shared CF Proxy domain pool. On unless you set a CF_PROXY_DOMAIN of your own:
+# it is the last rung before blind relay and the only path DC1/DC3/DC5 have on a
+# stock install. Set to "0" to keep it off and blind-relay those DCs instead.
 # WRTG_CFPROXY_AUTO="0"
 
 # Disable CF Worker/Proxy fallback entirely.

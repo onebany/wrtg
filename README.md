@@ -159,7 +159,7 @@ DC1/DC3/DC5 часто отвечают HTTP 302 на direct WS — для ни�
 | `CF_WORKER_DOMAIN` | Worker hostname(s), через запятую | пусто |
 | `WRTG_CF_WORKER_TOKEN` | Secret = Worker `WRTG_TOKEN` | пусто |
 | `CF_PROXY_DOMAIN` | Свой CF-proxied домен(s) | пусто |
-| `WRTG_CFPROXY_AUTO` | Публичный CF Proxy pool | вкл, если нет своего Worker/домена |
+| `WRTG_CFPROXY_AUTO` | Публичный CF Proxy pool | вкл, если не задан свой `CF_PROXY_DOMAIN` |
 | `WRTG_NO_CFPROXY` | Отключить CF Worker/Proxy fallback и worker passthrough | выкл |
 | `WRTG_NO_WORKER_PASSTHROUGH` | Не туннелировать media через Worker | выкл |
 
