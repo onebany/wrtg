@@ -28,6 +28,8 @@ pub enum Stat {
     AllPathsFailed,
     IdleReaped,
     PassthroughNoData,
+    CfProxyMedia,
+    MediaHttpRejected,
 }
 
 /// Display names, index-aligned with [`Stat`].
@@ -45,10 +47,12 @@ const NAMES: [&str; Stat::COUNT] = [
     "all_paths_failed",
     "idle_reaped",
     "passthrough_no_data",
+    "cf_proxy_media",
+    "media_http_rejected",
 ];
 
 impl Stat {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 15;
 
     pub fn name(self) -> &'static str {
         NAMES[self as usize]

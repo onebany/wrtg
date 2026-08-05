@@ -73,6 +73,25 @@ pub fn needs_http_host_rewrite(orig_ip: &str) -> bool {
     dc_from_orig_dst(orig_ip).is_some_and(|(_, is_media)| is_media)
 }
 
+/// Status code of an HTTP response head, if the bytes are one at all.
+pub fn http_status_code(chunk: &[u8]) -> Option<u16> {
+    let head = std::str::from_utf8(chunk).ok()?;
+    let line = head.lines().next()?;
+    let rest = line.strip_prefix("HTTP/")?;
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Whether an MTProto-over-HTTP answer from the front is a refusal.
+///
+/// The transport carries MTProto in the body of an HTTP 200. Anything else —
+/// in practice a 302 to `core.telegram.org`, meaning "wrong endpoint" — is not
+/// an answer the client can use, and relaying it verbatim is what turns a
+/// media download into a thumbnail that spins forever. `None` means the
+/// response was not HTTP at all, which this does not judge.
+pub fn media_http_rejected(status: Option<u16>) -> bool {
+    matches!(status, Some(s) if !(200..300).contains(&s))
+}
+
 /// Whether blind-relay should try CF Worker passthrough for this flow.
 ///
 /// All MTProto-over-HTTP (`:80`) must use local `FRONT_IP` — the front routes on
@@ -157,6 +176,34 @@ mod tests {
         assert_ne!(out, req);
         let host = parse_http_host(&out);
         assert_eq!(host.as_deref(), Some("kws5-1.web.telegram.org"));
+    }
+
+    #[test]
+    fn http_status_code_reads_the_status_line() {
+        assert_eq!(
+            http_status_code(b"HTTP/1.1 302 Found\r\nLocation: https://core.telegram.org\r\n\r\n"),
+            Some(302)
+        );
+        assert_eq!(http_status_code(b"HTTP/1.1 200 OK\r\n\r\n"), Some(200));
+    }
+
+    #[test]
+    fn http_status_code_ignores_a_non_http_response() {
+        // MTProto-over-HTTP answers carry a binary body, but the response head
+        // is still HTTP; anything else is another protocol and not ours to judge.
+        assert_eq!(http_status_code(&[0x16, 0x03, 0x01, 0x00, 0x9a]), None);
+        assert_eq!(http_status_code(b""), None);
+    }
+
+    #[test]
+    fn media_http_answer_is_rejected_unless_it_is_2xx() {
+        // A 302 to core.telegram.org is the front saying "not my endpoint". It
+        // is not an MTProto answer, so relaying it leaves the client waiting
+        // forever — the eternally-loading thumbnail.
+        assert!(media_http_rejected(Some(302)));
+        assert!(media_http_rejected(Some(403)));
+        assert!(!media_http_rejected(Some(200)));
+        assert!(!media_http_rejected(None));
     }
 
     #[test]

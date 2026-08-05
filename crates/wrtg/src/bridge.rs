@@ -775,6 +775,9 @@ async fn finish_cf_proxy_connect(
                 return None;
             }
             crate::stats::inc(crate::stats::Stat::CfProxy);
+            if is_media {
+                crate::stats::inc(crate::stats::Stat::CfProxyMedia);
+            }
             log::debug!("[{label}] DC{dc} -> WS connected via CF proxy {cf_domain_owned}");
             Some((ws, cf_domain_owned))
         }
@@ -1171,6 +1174,18 @@ pub async fn blind_relay(
         Ok(0) => {}
         Ok(n) => {
             log_http_response(label, &dst, &peek[..n]);
+            // An MTProto-over-HTTP flow that comes back as anything but 2xx is
+            // dead on arrival: the client is handed a redirect where it expects
+            // a message, and waits on it forever. Count it — the bytes still get
+            // relayed, because dropping them here would be a guess about what
+            // the client does next, and this is the first build that can even
+            // see how often it happens.
+            if orig_port == 80
+                && crate::media::needs_http_host_rewrite(orig_ip)
+                && crate::media::media_http_rejected(crate::media::http_status_code(&peek[..n]))
+            {
+                crate::stats::inc(crate::stats::Stat::MediaHttpRejected);
+            }
             if cw.write_all(&peek[..n]).await.is_err() {
                 up.abort();
                 return;
