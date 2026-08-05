@@ -83,8 +83,24 @@ fn proxy_env_set(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Auto-fetch is opt-in because public CF domain pools are untrusted and can
-/// introduce long fallback delays when stale.
+/// Whether to activate the shared CF Proxy pool, given the raw
+/// `WRTG_CFPROXY_AUTO` value and whether the router has a fallback of its own.
+///
+/// An explicit setting always wins. Unset, the pool activates only as a last
+/// resort: the domains are third-party and a stale one costs a fallback delay,
+/// which is a fair price when the alternative is that DC1/DC3/DC5 — the DCs the
+/// stock front answers HTTP 302 for — have no path at all, but not a price to
+/// impose on a router that already has its own Worker or domain.
+pub fn cfproxy_auto_decision(setting: Option<&str>, has_own_fallback: bool) -> bool {
+    match setting {
+        Some(v) => {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true")
+        }
+        None => !has_own_fallback,
+    }
+}
+
 pub fn cfproxy_auto_enabled() -> bool {
     if cf_fallback_disabled() {
         return false;
@@ -92,13 +108,9 @@ pub fn cfproxy_auto_enabled() -> bool {
     if user_proxy_domains_configured() {
         return false;
     }
-    match std::env::var("WRTG_CFPROXY_AUTO") {
-        Ok(v) => {
-            let v = v.trim();
-            v == "1" || v.eq_ignore_ascii_case("true")
-        }
-        Err(_) => false,
-    }
+    let setting = std::env::var("WRTG_CFPROXY_AUTO").ok();
+    let has_own_fallback = !crate::cf_balancer::worker_domains().is_empty();
+    cfproxy_auto_decision(setting.as_deref(), has_own_fallback)
 }
 
 pub fn is_valid_domain(domain: &str) -> bool {
@@ -307,6 +319,26 @@ mod tests {
         std::env::remove_var("WRTG_CFPROXY_AUTO");
         std::env::remove_var("CF_PROXY_DOMAIN");
         std::env::remove_var("WRTG_CF_PROXY_DOMAINS");
+        crate::cf_balancer::set_worker_domains(vec!["w1.workers.dev".into()]);
         assert!(!cfproxy_auto_enabled());
+        crate::cf_balancer::set_worker_domains(Vec::new());
+    }
+
+    #[test]
+    fn cfproxy_auto_activates_as_a_last_resort() {
+        // Nothing else can reach the DCs the front does not cover, so the
+        // shared pool is better than blind-relaying them.
+        assert!(cfproxy_auto_decision(None, false));
+    }
+
+    #[test]
+    fn cfproxy_auto_stays_off_when_the_router_has_its_own_fallback() {
+        assert!(!cfproxy_auto_decision(None, true));
+    }
+
+    #[test]
+    fn cfproxy_auto_explicit_setting_wins_either_way() {
+        assert!(cfproxy_auto_decision(Some("1"), true));
+        assert!(!cfproxy_auto_decision(Some("0"), false));
     }
 }

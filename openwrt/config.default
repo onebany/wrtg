@@ -57,13 +57,13 @@ FRONT_IP="149.154.167.220"
 # WRTG_CF_WORKER_TOKEN="replace-with-a-long-random-value"
 
 # Cloudflare-proxied domain(s) for WS fallback (comma-separated).
-# Public domain pool is opt-in via WRTG_CFPROXY_AUTO (off by default).
 # Prefer CF_WORKER_DOMAIN or your own domain.
 # CF_PROXY_DOMAIN="your-domain.example.com"
 
-# Auto-fetch shared CF Proxy domain pool. Off by default because public pools
-# are untrusted and often stale; prefer your own Worker/domain.
-# WRTG_CFPROXY_AUTO="1"
+# Shared CF Proxy domain pool. Used automatically when no CF Worker and no
+# CF_PROXY_DOMAIN of your own is set — without it DC1/DC3/DC5 have no path at
+# all. Set to "0" to keep it off and blind-relay those DCs instead.
+# WRTG_CFPROXY_AUTO="0"
 
 # Disable CF Worker/Proxy fallback entirely.
 # WRTG_NO_CFPROXY="1"
