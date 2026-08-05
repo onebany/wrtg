@@ -7,7 +7,7 @@ use wrtg::bridge::{
     blind_relay, is_self_target, should_skip_ws, try_cf_fallback, try_tcp_fallback, try_ws_bridge,
     CfBridgeResult, TcpFallbackResult, WsBridgeResult,
 };
-use wrtg::cf_balancer::proxy_domains;
+use wrtg::cf_balancer::{dcs_without_fallback, proxy_domains};
 use wrtg::cf_proxy_domains::{
     cfproxy_auto_enabled, seed_default_cfproxy_domains, start_cfproxy_refresh_task,
 };
@@ -109,6 +109,19 @@ async fn main() {
         cfg.cf_worker_domains.len(),
         proxy_domains().len()
     );
+
+    let stranded = dcs_without_fallback(
+        &cfg.front_dcs,
+        cfg.cf_worker_domains.len(),
+        proxy_domains().len(),
+    );
+    if !stranded.is_empty() {
+        log::warn!(
+            "no CF Worker and no CF Proxy domain configured: DC{stranded:?} have no fallback path \
+             (the front answers HTTP 302 for them) and will end up in blind relay. \
+             Set CF_WORKER_DOMAIN, or WRTG_CFPROXY_AUTO=1 for the public proxy pool."
+        );
+    }
 
     spawn_reload_handler();
     wrtg::stats::serve(wrtg::stats::socket_path());

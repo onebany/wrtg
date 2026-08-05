@@ -57,6 +57,21 @@ pub fn worker_passthrough_disabled() -> bool {
     })
 }
 
+/// DCs left with no working path at all: outside the front scope (the front
+/// answers HTTP 302 for those) and with neither CF rung configured.
+///
+/// Worth reporting because the gap is otherwise invisible at runtime: the CF
+/// Proxy rung is skipped silently when its domain pool is empty, so a router
+/// whose Workers are dead and whose `WRTG_CFPROXY_AUTO` is off just blind-relays
+/// every DC1/DC3/DC5 session into a TCP-blocked IP and logs nothing that points
+/// at the cause.
+pub fn dcs_without_fallback(front_dcs: &[i32], workers: usize, proxies: usize) -> Vec<i32> {
+    if workers > 0 || proxies > 0 {
+        return Vec::new();
+    }
+    (1..=5).filter(|dc| !front_dcs.contains(dc)).collect()
+}
+
 fn ordered_domains(
     domains: &[String],
     dc: i32,
@@ -196,5 +211,20 @@ mod tests {
         let domains = proxy_domains_for_dc(1);
         assert_eq!(domains.first().map(String::as_str), Some("b.co.uk"));
         assert_eq!(domains.len(), 2);
+    }
+
+    #[test]
+    fn dcs_without_fallback_lists_uncovered_dcs() {
+        // Stock setup: the front only covers DC2/DC4, and neither CF rung is
+        // configured — DC1/DC3/DC5 are then reachable by no path at all.
+        assert_eq!(dcs_without_fallback(&[2, 4], 0, 0), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn dcs_without_fallback_empty_when_a_cf_rung_exists() {
+        assert!(dcs_without_fallback(&[2, 4], 0, 20).is_empty());
+        assert!(dcs_without_fallback(&[2, 4], 1, 0).is_empty());
+        // A front covering every DC needs no CF rung either.
+        assert!(dcs_without_fallback(&[1, 2, 3, 4, 5], 0, 0).is_empty());
     }
 }
