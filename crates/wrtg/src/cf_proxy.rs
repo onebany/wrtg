@@ -34,17 +34,23 @@ fn cf_proxy_parallel_limit() -> usize {
 static CFPROXY_SEM: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(cf_proxy_parallel_limit())));
 
-/// The `(dial target, TLS/Host name)` pair for one CF proxy attempt.
+/// Hosts to try for one CF proxy base domain, in order.
 ///
-/// Both are the `kws{N}` subdomain. Dialling the base domain instead looks
-/// equivalent — same Cloudflare zone, and the SNI would still say `kws{N}` — but
-/// it is not: in the public pool the base names carry no A record whatsoever,
-/// only the per-DC subdomains are proxied. Resolving the base domain therefore
-/// fails outright ("Name has no usable address") and the whole CF Proxy rung
-/// silently degrades to blind relay.
-pub fn cf_proxy_endpoint(cf_domain: &str, dc: i32, is_media: bool) -> (String, String) {
+/// Each host is both the dial target and the TLS/Host name. Dialling the base
+/// domain instead looks equivalent — same Cloudflare zone, and the SNI would
+/// still say `kws{N}` — but it is not: in the shared pool the base names carry
+/// no A record whatsoever, only the per-DC subdomains are proxied.
+///
+/// Media prefers `kws{N}-1` but falls back to `kws{N}`: the CDN host is absent
+/// from the shared pool, and without the fallback every media session skips the
+/// rung entirely.
+pub fn cf_proxy_hosts(cf_domain: &str, dc: i32, is_media: bool) -> Vec<String> {
     let host = cf_proxy_ws_domain(cf_domain, dc, is_media);
-    (host.clone(), host)
+    if !is_media {
+        return vec![host];
+    }
+    let base = cf_proxy_ws_domain(cf_domain, dc, false);
+    vec![host, base]
 }
 
 /// Connect via a Cloudflare-proxied domain (TLS to CF, CF forwards to Telegram).
@@ -56,8 +62,17 @@ pub async fn connect_cf_proxy_ws(
     is_media: bool,
     connect_timeout: Duration,
 ) -> Result<RawWebSocket, WsConnectError> {
-    let (dial_host, sni_host) = cf_proxy_endpoint(cf_domain, dc, is_media);
-    cf_connect_domain(&dial_host, &sni_host, connect_timeout, &[]).await
+    let hosts = cf_proxy_hosts(cf_domain, dc, is_media);
+    let mut last_err = None;
+    for host in hosts {
+        match cf_connect_domain(&host, &host, connect_timeout, &[]).await {
+            Ok(ws) => return Ok(ws),
+            // A rate-limited zone stays rate-limited on its sibling host.
+            Err(e) if is_ws_http_status(&e, 429) => return Err(e),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or(WsConnectError::Timeout))
 }
 
 async fn cf_connect_domain(
@@ -156,9 +171,17 @@ mod tests {
         // The base domain of a CF-proxied zone need not resolve at all — in the
         // public pool only the per-DC `kws{N}` subdomains carry A records, so
         // dialling the base domain fails DNS before a packet leaves the box.
-        let (dial, sni) = cf_proxy_endpoint("x.co.uk", 1, false);
-        assert_eq!(dial, "kws1.x.co.uk");
-        assert_eq!(sni, "kws1.x.co.uk");
-        assert_ne!(dial, "x.co.uk");
+        let hosts = cf_proxy_hosts("x.co.uk", 1, false);
+        assert_eq!(hosts, vec!["kws1.x.co.uk".to_string()]);
+    }
+
+    #[test]
+    fn cf_proxy_media_falls_back_to_the_non_media_host() {
+        // `kws{N}-1` is absent from the shared pool, so a media session that
+        // only ever tries the media host can never connect.
+        assert_eq!(
+            cf_proxy_hosts("x.co.uk", 2, true),
+            vec!["kws2-1.x.co.uk".to_string(), "kws2.x.co.uk".to_string()]
+        );
     }
 }
