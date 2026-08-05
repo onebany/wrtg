@@ -261,7 +261,7 @@ mod tests {
     fn http_503_cools_the_worker() {
         let w = "svc503.example".to_string();
         clear_worker_429(&w);
-        mark_worker_429_with_peers(&w, &handshake_err(503), &[w.clone()]);
+        mark_worker_429_with_peers(&w, &handshake_err(503), std::slice::from_ref(&w));
         assert!(worker_rate_limited(&w), "503 must cool the worker");
         assert!(worker_cooldown_remaining(&w) > Duration::ZERO);
         clear_worker_429(&w);
@@ -290,8 +290,8 @@ mod tests {
         // Worker for one bad target.
         let w = "svc502.example".to_string();
         clear_worker_429(&w);
-        mark_worker_429_with_peers(&w, &handshake_err(502), &[w.clone()]);
-        mark_worker_429_with_peers(&w, &handshake_err(500), &[w.clone()]);
+        mark_worker_429_with_peers(&w, &handshake_err(502), std::slice::from_ref(&w));
+        mark_worker_429_with_peers(&w, &handshake_err(500), std::slice::from_ref(&w));
         assert!(!worker_rate_limited(&w));
     }
 }
