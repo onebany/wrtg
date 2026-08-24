@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.36 - 2026-08-24
+
+### Fixed
+- **Installing on OpenWrt failed at the first download** — `wget -t 5` aborts on the BusyBox wget OpenWrt ships: the applet is compiled to a feature set and that build has no `--tries`, so it printed "unrecognized option: t" with a usage dump and exited. Every fetch used that call, the release lookup included, so the run ended on "cannot resolve latest release (atom feed and API both failed)" — a message about GitHub for a fault that never left the router. A router with curl, or with a BusyBox built with `--tries`, takes the other path and never saw it. wget now gets only `-q`, `-T` and `-O`, with the retries moved into the callers so curl and wget both keep them. The same call in `check-update.sh` broke the LuCI **Update** button and `check-update.sh update` on those routers, and is fixed with it.
+
 ## 0.5.35 - 2026-08-05
 
 ### Fixed
