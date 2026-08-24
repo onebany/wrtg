@@ -29,18 +29,42 @@ INSECURE="${WRTG_INSECURE:-0}"
 err() { echo "wrtg: $*" >&2; exit 1; }
 warn() { echo "wrtg: $*" >&2; }
 
+# One download attempt. url dest max_seconds.
+#
+# Only -q, -T and -O are passed to wget: BusyBox applets are compiled to a
+# feature set, and the wget OpenWrt ships is built without --tries/-t. Passing
+# it there aborts with "unrecognized option: t" and a usage dump, which took
+# down the whole install — including the release lookup, so the script gave up
+# with "cannot resolve latest release" and never said why. Retries therefore
+# live in fetch()/fetch_optional() below, where every downloader gets them.
+fetch_once() { # url dest max_seconds
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 15 --max-time "$3" "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T "$3" -O "$2" "$1"
+	else return 127; fi
+}
+
 fetch() { # url dest — big files (bundle/binary/sources): generous total time on slow links.
 	# Retries matter: some ISPs' DPI randomly drops TCP connects to GitHub's
 	# asset hosts, and a single retry usually gets through.
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 15 --max-time 300 --retry 5 --retry-connrefused "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 300 -t 5 -O "$2" "$1"
-	else err "need curl or wget"; fi
+	_try=1
+	while :; do
+		fetch_once "$1" "$2" 300 && return 0
+		[ "$?" = 127 ] && err "need curl or wget"
+		[ "$_try" -ge 5 ] && err "download failed after 5 attempts: $1"
+		_try=$((_try + 1))
+		sleep 2
+	done
 }
 
 fetch_optional() { # url dest — returns 0 on success, 1 on 404/missing
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 30 --retry 3 --retry-connrefused "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 30 -t 3 -O "$2" "$1"
-	else return 1; fi
+	_try=1
+	while :; do
+		fetch_once "$1" "$2" 30 && return 0
+		[ "$?" = 127 ] && return 1
+		[ "$_try" -ge 3 ] && return 1
+		_try=$((_try + 1))
+		sleep 1
+	done
 }
 
 release_base() { printf 'https://github.com/%s' "$WRTG_REPO"; }

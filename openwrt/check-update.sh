@@ -32,6 +32,17 @@ progress() {
 	printf 'PCT=%s\nMSG=%s\n' "$1" "$2" >> "$PROGRESS_FILE" 2>/dev/null || true
 }
 
+# One download attempt. url dest max_seconds.
+#
+# Only -q, -T and -O are passed to wget: the BusyBox wget OpenWrt ships is
+# compiled without --tries/-t, and passing it aborts the applet with a usage
+# dump. Retries live in the callers below so every downloader gets them.
+fetch_once() { # url dest max_seconds
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 15 --max-time "$3" "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q -T "$3" -O "$2" "$1"
+	else return 127; fi
+}
+
 fetch() { # url dest — big files (the release bundle): generous total time on slow links.
 	# `--max-time` caps the WHOLE transfer, not just the connect. At the old flat
 	# 15 s a ~5 MB bundle needed a sustained ~2.7 Mbit/s or the update aborted
@@ -39,15 +50,25 @@ fetch() { # url dest — big files (the release bundle): generous total time on 
 	# is a routine failure. bootstrap.sh already splits big from small this way;
 	# check-update.sh kept the flat timeout, so installs worked and in-place
 	# updates (LuCI "Update", `check-update.sh update`) did not.
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 15 --max-time 300 --retry 5 --retry-connrefused "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 300 -t 5 -O "$2" "$1"
-	else err "need curl or wget"; fi
+	_try=1
+	while :; do
+		fetch_once "$1" "$2" 300 && return 0
+		[ "$?" = 127 ] && err "need curl or wget"
+		[ "$_try" -ge 5 ] && err "download failed after 5 attempts: $1"
+		_try=$((_try + 1))
+		sleep 2
+	done
 }
 
 fetch_optional() { # url dest — small metadata (release feed, SHA256SUMS).
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 30 --retry 3 --retry-connrefused "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q -T 30 -t 3 -O "$2" "$1"
-	else return 1; fi
+	_try=1
+	while :; do
+		fetch_once "$1" "$2" 30 && return 0
+		[ "$?" = 127 ] && return 1
+		[ "$_try" -ge 3 ] && return 1
+		_try=$((_try + 1))
+		sleep 1
+	done
 }
 
 normalize_ver() {
