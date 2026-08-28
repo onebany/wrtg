@@ -332,11 +332,17 @@ mod tests {
 
     #[test]
     fn refresh_interval_is_floored_so_a_typo_cannot_hammer_the_source() {
-        assert_eq!(parse_refresh_interval(Some("7200")), Duration::from_secs(7200));
+        assert_eq!(
+            parse_refresh_interval(Some("7200")),
+            Duration::from_secs(7200)
+        );
         assert_eq!(parse_refresh_interval(None), DEFAULT_REFRESH_INTERVAL);
         // A stray "5" would mean twelve requests a minute, every hour of the day.
         assert_eq!(parse_refresh_interval(Some("5")), MIN_REFRESH_INTERVAL);
-        assert_eq!(parse_refresh_interval(Some("nonsense")), DEFAULT_REFRESH_INTERVAL);
+        assert_eq!(
+            parse_refresh_interval(Some("nonsense")),
+            DEFAULT_REFRESH_INTERVAL
+        );
     }
 
     #[test]
@@ -347,8 +353,14 @@ mod tests {
         );
         // Anything unparseable falls back to the built-in source rather than
         // leaving the router with no refresh at all.
-        assert_eq!(split_https_url("http://no-tls.example/x"), default_host_path());
-        assert_eq!(split_https_url("https://host-only.example"), default_host_path());
+        assert_eq!(
+            split_https_url("http://no-tls.example/x"),
+            default_host_path()
+        );
+        assert_eq!(
+            split_https_url("https://host-only.example"),
+            default_host_path()
+        );
     }
 
     #[test]

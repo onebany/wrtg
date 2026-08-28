@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 0.5.39 · **Last updated:** 2026-08-28
+**Version:** 1.0.0 · **Last updated:** 2026-08-28
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
@@ -127,6 +127,20 @@ wrtg --check
 
 Файл `/etc/wrtg/config`. Front/домены/DC-learn применяются вживую: **`/etc/init.d/wrtg reload`** (SIGHUP, без разрыва сессий). Полный **`restart`** нужен только для `LISTEN`/nftables.
 Только CIDR/nft: `/etc/wrtg/update-cidr.sh`.
+
+Проще всего править в LuCI: **Services → wrtg → Settings**. Страница разбита на секции — датацентры, CF Proxy, CF Worker, логи и производительность — и внизу остаётся редактор файла целиком.
+
+### Что обещает версия
+
+С 1.0 действует semver, но не на все переменные сразу. Поверхность поделена так:
+
+| Уровень | Что входит | Обещание |
+|---------|------------|----------|
+| **Стабильные** | `FRONT_IP`, `WRTG_FRONT_DCS`, `WRTG_DC_IPS`, `CF_WORKER_DOMAIN`, `WRTG_CF_WORKER_TOKEN`, `CF_PROXY_DOMAIN`, `WRTG_CFPROXY_AUTO`, `WRTG_NO_CFPROXY`, `WRTG_NO_WORKER_PASSTHROUGH`, `WRTG_SKIP_SRC`, `LISTEN`, `ROUTER_IP`, `LAN_IF` | Имя и смысл не меняются в пределах 1.x. Переименование — только с мажорной версией и после релиза, где старое имя ещё работает и предупреждает. |
+| **Тюнинг** | таймауты, размеры и TTL пулов, cooldown'ы, `WRTG_CFPROXY_*`, `WRTG_WS_*`, `WRTG_CF_WORKER_POOL_*`, `WRTG_DOH_CACHE_SEC` | Имена сохраняются, а **значения по умолчанию могут меняться** в минорных версиях: они подбираются по замерам на живых сетях. Задали своё — оно и останется. |
+| **Внутренние** | `WRTG_STATS_SOCKET`, `WRTG_DC_LEARN_FILE`, `WRTG_DC_IPS_FILE`, `WRTG_CONFIG_FILE`, `RUST_LOG` | Могут измениться в любом релизе. Это отладочные ручки, а не настройки. |
+
+Формат `--stats` тоже не заморожен: счётчики добавляются по мере надобности, поэтому парсить его скриптами стоит по имени строки, а не по позиции.
 
 ### Основное
 
@@ -379,10 +393,12 @@ logread -e wrtg | grep -i 'CF proxy'
 
 ## Ограничения
 
-- **Голос/видео** — UDP/WebRTC не проксируется; wrtg перехватывает только TCP (сигналинг).
-- **IPv4 only** — `SO_ORIGINAL_DST` работает только с IPv4.
-- **Worker deploy.** Изменив `openwrt/cf-worker.js`, вы должны выкатить его в Cloudflare отдельно.
-- **Общий CF Proxy pool** проектом не контролируется: домены чужие и могут отвалиться в любой момент.
+- **Голос и видео.** UDP и WebRTC не проксируются: wrtg перехватывает только TCP, то есть сигналинг.
+- **Только IPv4.** `SO_ORIGINAL_DST` с IPv6 не работает.
+- **Worker выкатывается отдельно.** Изменив `openwrt/cf-worker.js`, вы обновляете его в Cloudflare руками.
+- **Общий CF Proxy pool держится на чужих доменах.** Список ведёт сторонний проект, домены могут отвалиться в любой момент, и часть их регулярно отвечает 404 или 503 — на живом пуле рабочими оказывались от 6 до 20 доменов из 20 в зависимости от DC. Свой Worker или свой `CF_PROXY_DOMAIN` надёжнее.
+- **Обновление ломается там, где провайдер режет Fastly.** Релизы и `raw.githubusercontent.com` живут на диапазоне `185.199.108-111.0/24`. Если он заблокирован, кнопка **Обновить** в LuCI и `bootstrap.sh` не скачают ничего, хотя сам `github.com` доступен. Обходы: [офлайн-установка](#офлайн-установка-github-недоступен-с-роутера) или зеркало в `WRTG_CFPROXY_DOMAINS_URL` для списка доменов.
+- **Провайдер может закрыть Telegram целиком.** Тогда прямой путь недоступен весь, и всё держится на CF Worker или CF Proxy. Если и они не отвечают, wrtg честно доходит до blind relay, но соединения не будет.
 
 ---
 

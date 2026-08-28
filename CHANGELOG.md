@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0 - 2026-08-28
+
+Same daemon that has been relaying on four routers for months, with the
+version number it had earned and a written promise about what stays put.
+
+### Added
+- **LuCI settings are grouped into sections** — data centres, CF Proxy, CF Worker, logging and performance, connectivity — each with a state badge and plain labels instead of a flat list of variable names. DC overrides take one `number:IP` per line rather than a comma-joined string.
+- **The shared CF Proxy list is configurable, not just automatic.** It has always refreshed itself on a timer; `WRTG_CFPROXY_DOMAINS_URL` and `WRTG_CFPROXY_REFRESH_SEC` now set the source and the interval, both editable in LuCI. Where an ISP blocks the Fastly range `raw.githubusercontent.com` resolves into, a mirror keeps the pool current — two of the four routers here cannot reach the default source.
+- **`tools/ab-compare.sh`** runs two builds on a live router under the same traffic and prints the counters side by side. Both regressions shipped this cycle passed unit tests and a one-minute reading; this is the check that would have caught them. A run where neither build failed says INCONCLUSIVE rather than pretending the builds are equivalent.
+- **A stability contract in the README**: which variables are frozen for 1.x, which keep their names but may get new defaults, and which are internal.
+
+### Changed
+- **Documented limitations are stated plainly** — the shared pool runs on domains someone else maintains, updates break where Fastly is blocked, and an ISP can cut Telegram off entirely. The media-over-HTTP note is gone: media does load, and the counter behind it only tracks redundant retries.
+
 ## 0.5.39 - 2026-08-28
 
 ### Fixed
