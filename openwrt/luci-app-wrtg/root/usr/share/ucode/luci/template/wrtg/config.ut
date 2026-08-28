@@ -14,6 +14,41 @@ function run_check_cmd() {
 	return trim(popen('/bin/sh -c \'. /etc/wrtg/lib.sh && set -a && load_config && /usr/sbin/wrtg --check 2>&1\'', 'r')?.read('all') ?? '');
 }
 
+// "2:1.2.3.4\n4:1.2.3.4" (as typed in the textarea) -> "2:1.2.3.4,4:1.2.3.4"
+// (the form WRTG_DC_IPS takes). Blank lines and stray spaces are dropped so a
+// pasted list does not have to be tidied by hand.
+function dc_ips_from_lines(v) {
+	let out = [];
+	// Newlines are spelled out: `\s` does not match them in the ucode build
+	// OpenWrt ships, so a textarea would arrive as one unsplit blob.
+	for (let part in split(v ?? '', /[,;\r\n\t ]+/)) {
+		part = trim(part);
+		if (length(part) && match(part, /^[0-9]+:[0-9.]+$/))
+			push(out, part);
+	}
+	return join(',', out);
+}
+
+// Back the other way, for display.
+function dc_ips_to_lines(v) {
+	return join('\n', split(v ?? '', ','));
+}
+
+// One rung of `wrtg --check` rather than the whole sweep: the Test buttons sit
+// next to a single setting, so showing every probe would bury the answer.
+function run_probe(which) {
+	let out = run_check_cmd();
+	let keep = [];
+	for (let line in split(out, /\n/)) {
+		let l = lc(line);
+		if (which == 'proxy' && (index(l, 'proxy') >= 0 || index(l, 'cf ') >= 0))
+			push(keep, line);
+		else if (which == 'worker' && index(l, 'worker') >= 0)
+			push(keep, line);
+	}
+	return length(keep) ? join('\n', keep) : out;
+}
+
 function cfg_escape(val) {
 	val = replace(val, /[\r\n]/g, '');
 	val = replace(val, /\\/g, '\\\\');
@@ -37,7 +72,7 @@ function set_key(text, key, val) {
 // Prevents the "Name does not resolve" TLS SNI failure from a pasted URL.
 function sanitize_domains(v) {
 	let out = [];
-	for (let part in split(v ?? '', /[,;\s]+/)) {
+	for (let part in split(v ?? '', /[,;\r\n\t ]+/)) {
 		part = trim(part);
 		if (!length(part)) continue;
 		let m = match(part, /^[A-Za-z]+:\/\/(.*)$/);
@@ -66,14 +101,24 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	let saved = false;
 	if (form == 'quick') {
 		let text = readfile(cfg_path) ?? '';
-		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN',
-		               'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS']) {
+		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'WRTG_DC_IPS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN',
+		               'CF_PROXY_DOMAIN', 'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS',
+		               'WRTG_CFPROXY_DOMAINS_URL', 'WRTG_CFPROXY_REFRESH_SEC',
+		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
 				v = sanitize_domains(v);
+			if (k == 'WRTG_DC_IPS')
+				v = dc_ips_from_lines(v);
 			text = set_key(text, k, trim(v));
 		}
+		// Checkboxes post nothing when cleared, so a marker field says "this
+		// form owns the key" and the box itself says on or off.
+		if (http.formvalue('_cb_cfproxy_auto') == '1')
+			text = set_key(text, 'WRTG_CFPROXY_AUTO', http.formvalue('cb_cfproxy_auto') == '1' ? '1' : '0');
+		if (http.formvalue('_cb_verbose') == '1')
+			text = set_key(text, 'RUST_LOG', http.formvalue('cb_verbose') == '1' ? 'debug' : '');
 		writefile(cfg_path, text);
 		system('chmod 600 /etc/wrtg/config');
 		msg = _('Saved. Restart wrtg to apply pools/scope changes.');
@@ -81,6 +126,14 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	} else if (form == 'check') {
 		check_out = run_check_cmd();
 		msg = _('Connectivity check finished.');
+		saved = false;
+	} else if (form == 'test_proxy') {
+		check_out = run_probe('proxy');
+		msg = _('CF Proxy probe finished.');
+		saved = false;
+	} else if (form == 'test_worker') {
+		check_out = run_probe('worker');
+		msg = _('CF Worker probe finished.');
 		saved = false;
 	} else if (form == 'raw') {
 		let data = http.formvalue('_cfg');
@@ -133,6 +186,12 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 let cfg = readfile(cfg_path) ?? '';
 let cur_worker = cfg_val(cfg, 'CF_WORKER_DOMAIN');
 let cur_token = cfg_val(cfg, 'WRTG_CF_WORKER_TOKEN');
+let cur_proxy = cfg_val(cfg, 'CF_PROXY_DOMAIN');
+// Unset means on unless the router brought its own domain — same rule the daemon uses.
+let cf_auto_raw = cfg_val(cfg, 'WRTG_CFPROXY_AUTO');
+let cf_auto_on = length(cf_auto_raw) ? (cf_auto_raw == '1' || lc(cf_auto_raw) == 'true') : !length(cur_proxy);
+let verbose_on = lc(cfg_val(cfg, 'RUST_LOG')) == 'debug';
+let default_domains_url = 'https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt';
 let url = dispatcher.build_url('admin', 'services', 'wrtg', 'config');
 let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 %}
@@ -143,96 +202,166 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 
 {% if (length(msg)) { %}<div class="alert-message {{ msg_ok ? 'success' : 'warning' }}">{{ msg }}</div>{% } %}
 
-<div class="cbi-section" style="border:1px solid var(--border-color-medium,#4a4a4a);border-radius:8px;padding:14px 16px;margin-bottom:14px">
-	<h3 style="margin-top:0">Cloudflare Worker
-		{% if (length(cur_worker)) { %}<span style="color:#2e7d32;font-size:13px">● настроен</span>
-		{% } else { %}<span style="color:#e08e0b;font-size:13px">● не задан</span>{% } %}
-	</h3>
-	<p style="margin:.2em 0 .8em">Бесплатный Cloudflare Worker включает <b>DC1/DC3/DC5 и media passthrough</b>. У каждого роутера — свой Worker; вставьте его адрес ниже.</p>
+<style>
+.wrtg-card { border:1px solid var(--border-color-medium,#4a4a4a); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+.wrtg-card > h3 { margin:0 0 .2em; }
+.wrtg-card .hint { font-size:13px; opacity:.75; margin:.1em 0 .9em; }
+.wrtg-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:.7em; }
+.wrtg-row label.k { min-width:15em; font-weight:600; }
+.wrtg-badge { font-size:12px; padding:1px 8px; border-radius:10px; }
+.wrtg-on  { color:#2e7d32; } .wrtg-off { color:#e08e0b; }
+.wrtg-help summary { cursor:pointer; font-size:12px; opacity:.75; }
+.wrtg-help p, .wrtg-help ol { font-size:12px; opacity:.85; }
+</style>
 
-	<details style="margin-bottom:.8em">
-		<summary style="cursor:pointer;font-weight:600">Как создать свой Worker (5 минут)</summary>
-		<ol style="margin:.6em 0 .2em 1.2em;line-height:1.7">
-			<li>Зарегистрируйтесь (бесплатно) на <code>dash.cloudflare.com</code>.</li>
-			<li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Hello World</b> → <b>Deploy</b>.</li>
-			<li>Откройте <b>Edit code</b>, замените весь шаблон на код Worker для wrtg и нажмите <b>Deploy</b>.
-				Код и полная инструкция: <a href="{{ docs_url }}">Documentation</a>.</li>
-			<li>Скопируйте адрес вида <code>name.username.workers.dev</code> и вставьте в поле ниже.</li>
-			<li>Нажмите <b>Save &amp; Restart</b>. В логах появится <code>WS connected via CF worker</code>.</li>
-		</ol>
-		<p style="margin:.4em 0 0"><small>Проверка: <code>curl -i https://ВАШ-worker.workers.dev/apiws</code> → должен вернуть <code>426 Expected websocket</code>.</small></p>
-	</details>
-
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Telegram data centres (DC → IP)') }}</h3>
+	<p class="hint">{{ _('One rule per line, format number:IP. These win over the global front below — leave empty to use it for every DC in scope.') }}</p>
 	<form method="post" action="{{ url }}">
 		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
 		<input type="hidden" name="_form" value="quick" />
-		<div class="cbi-value">
-			<label class="cbi-value-title">CF_WORKER_DOMAIN</label>
-			<div class="cbi-value-field"><input type="text" name="CF_WORKER_DOMAIN" value="{{ cur_worker }}" placeholder="name.username.workers.dev" style="width:30em" />
-				<div class="cbi-value-description">Адрес вашего Worker (через запятую — несколько). Пусто = без Worker. Можно вставить полный URL — <code>https://…/</code> обрежется автоматически.</div></div>
+		<textarea name="WRTG_DC_IPS" rows="4" placeholder="2:149.154.167.220&#10;4:149.154.167.220" style="width:100%;max-width:36em;font-family:monospace;font-size:13px">{{ dc_ips_to_lines(cfg_val(cfg, 'WRTG_DC_IPS')) }}</textarea>
+		<div class="wrtg-row" style="margin-top:.8em">
+			<label class="k">FRONT_IP</label>
+			<input type="text" name="FRONT_IP" value="{{ cfg_val(cfg, 'FRONT_IP') }}" placeholder="149.154.167.220" style="width:16em" />
+			<small style="opacity:.7">{{ _('Reachable Telegram front') }}</small>
 		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">WRTG_CF_WORKER_TOKEN</label>
-			<div class="cbi-value-field"><input type="password" name="WRTG_CF_WORKER_TOKEN" value="{{ cur_token }}" autocomplete="new-password" style="width:30em" />
-				<div class="cbi-value-description">Optional secret matching the Worker's WRTG_TOKEN secret.</div></div>
-		</div>
-		<div class="cbi-page-actions">
-			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">Save &amp; Restart</button>
-		</div>
-	</form>
-</div>
-
-<div class="cbi-section">
-	<h3>{{ _('Connectivity check') }}</h3>
-	<p style="font-size:13px;opacity:.85">{{ _('Probe DNS and WSS for FRONT_IP, CF Worker, and CF Proxy (same as wrtg --check).') }}</p>
-	<form method="post" action="{{ url }}">
-		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
-		<input type="hidden" name="_form" value="check" />
-		<div class="cbi-page-actions">
-			<button class="cbi-button cbi-button-apply" type="submit">{{ _('Run check') }}</button>
-		</div>
-	</form>
-	{% if (length(check_out)) { %}
-		<pre style="margin-top:10px;font-size:12px;max-height:20em;overflow:auto">{{ check_out }}</pre>
-	{% } %}
-</div>
-
-<div class="cbi-section">
-	<form method="post" action="{{ url }}">
-		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
-		<input type="hidden" name="_form" value="quick" />
-		<div class="cbi-value">
-			<label class="cbi-value-title">FRONT_IP</label>
-			<div class="cbi-value-field"><input type="text" name="FRONT_IP" value="{{ cfg_val(cfg, 'FRONT_IP') }}" style="width:22em" />
-				<div class="cbi-value-description">{{ _('Reachable Telegram front (default 149.154.167.220).') }}</div></div>
-		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">WRTG_FRONT_DCS</label>
-			<div class="cbi-value-field"><input type="text" name="WRTG_FRONT_DCS" value="{{ cfg_val(cfg, 'WRTG_FRONT_DCS') }}" placeholder="2,4" style="width:22em" />
-				<div class="cbi-value-description">{{ _('DCs to send via FRONT_IP: 2,4 (default) · all · none · list. Others go to real IP / CF worker.') }}</div></div>
-		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">CF_PROXY_DOMAIN</label>
-			<div class="cbi-value-field"><input type="text" name="CF_PROXY_DOMAIN" value="{{ cfg_val(cfg, 'CF_PROXY_DOMAIN') }}" style="width:30em" />
-				<div class="cbi-value-description">{{ _('Your own CF-proxied domain(s). Leave empty to use the shared pool.') }}</div></div>
-		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">WRTG_CFPROXY_AUTO</label>
-			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_AUTO" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_AUTO') }}" placeholder="1" style="width:8em" />
-				<div class="cbi-value-description">{{ _('Shared CF proxy pool: 1 = on (default when no CF_PROXY_DOMAIN), 0 = off. Off leaves DC1/DC3/DC5 with no path.') }}</div></div>
-		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">WRTG_CFPROXY_MAX_ATTEMPTS</label>
-			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_MAX_ATTEMPTS" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_MAX_ATTEMPTS') }}" placeholder="3" style="width:8em" />
-				<div class="cbi-value-description">{{ _('CF proxy domains tried per session (default 3). Raise it when the shared pool is patchy.') }}</div></div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('DCs via the front') }}</label>
+			<input type="text" name="WRTG_FRONT_DCS" value="{{ cfg_val(cfg, 'WRTG_FRONT_DCS') }}" placeholder="2,4" style="width:16em" />
+			<small style="opacity:.7">{{ _('2,4 (default) · all · none · list') }}</small>
 		</div>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
 			<button class="cbi-button cbi-button-apply" type="submit" name="_reload" value="1">{{ _('Save & Reload') }}</button>
+		</div>
+	</form>
+</div>
+
+<div class="cbi-card wrtg-card">
+	<h3>Cloudflare Proxy
+		{% if (cf_auto_on) { %}<span class="wrtg-badge wrtg-on">● {{ _('shared pool on') }}</span>
+		{% } else if (length(cur_proxy)) { %}<span class="wrtg-badge wrtg-on">● {{ _('own domain') }}</span>
+		{% } else { %}<span class="wrtg-badge wrtg-off">● {{ _('off') }}</span>{% } %}
+	</h3>
+	<p class="hint">{{ _('Last rung before blind relay, and the only path DC1/DC3/DC5 have without a Worker.') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="wrtg-row">
+			<label><input type="hidden" name="_cb_cfproxy_auto" value="1" /><input type="checkbox" name="cb_cfproxy_auto" value="1" {{ cf_auto_on ? 'checked' : '' }} /> {{ _('Use the shared domain pool') }}</label>
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Own domain') }}</label>
+			<input type="text" name="CF_PROXY_DOMAIN" value="{{ cur_proxy }}" placeholder="proxy.example.com" style="width:24em" />
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Domains per session') }}</label>
+			<input type="text" name="WRTG_CFPROXY_MAX_ATTEMPTS" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_MAX_ATTEMPTS') }}" placeholder="3" style="width:6em" />
+			<small style="opacity:.7">{{ _('Raise it when the shared pool is patchy') }}</small>
+		</div>
+		<details class="wrtg-help">
+			<summary>{{ _('Shared pool: source and refresh') }}</summary>
+			<p>{{ _('The list is fetched on a timer and kept up to date on its own. Point it at a mirror if your ISP blocks the source.') }}</p>
+			<div class="wrtg-row">
+				<label class="k">{{ _('List URL') }}</label>
+				<input type="text" name="WRTG_CFPROXY_DOMAINS_URL" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_DOMAINS_URL') }}" placeholder="{{ default_domains_url }}" style="width:34em" />
+			</div>
+			<div class="wrtg-row">
+				<label class="k">{{ _('Refresh, seconds') }}</label>
+				<input type="text" name="WRTG_CFPROXY_REFRESH_SEC" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_REFRESH_SEC') }}" placeholder="3600" style="width:8em" />
+				<small style="opacity:.7">{{ _('minimum 300') }}</small>
+			</div>
+		</details>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
 			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
 		</div>
-		<p style="font-size:12px;opacity:.6">{{ _('Reload (SIGHUP) applies front/domains live without dropping sessions; Restart also re-applies LISTEN/nftables.') }}</p>
 	</form>
+	<form method="post" action="{{ url }}" style="margin-top:.4em">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="test_proxy" />
+		<button class="cbi-button" type="submit">{{ _('Test') }}</button>
+	</form>
+</div>
+
+<div class="cbi-card wrtg-card">
+	<h3>Cloudflare Worker
+		{% if (length(cur_worker)) { %}<span class="wrtg-badge wrtg-on">● {{ _('configured') }}</span>
+		{% } else { %}<span class="wrtg-badge wrtg-off">● {{ _('not set') }}</span>{% } %}
+	</h3>
+	<p class="hint">{{ _('Your own free Worker. Faster than the shared pool and it does not depend on domains other people run.') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="wrtg-row">
+			<label class="k">{{ _('Worker domains') }}</label>
+			<input type="text" name="CF_WORKER_DOMAIN" value="{{ cur_worker }}" placeholder="name.username.workers.dev" style="width:26em" />
+			<small style="opacity:.7">{{ _('comma-separated') }}</small>
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Secret') }}</label>
+			<input type="password" name="WRTG_CF_WORKER_TOKEN" value="{{ cur_token }}" autocomplete="new-password" style="width:26em" />
+			<small style="opacity:.7">{{ _("matches the Worker's WRTG_TOKEN") }}</small>
+		</div>
+		<details class="wrtg-help">
+			<summary>{{ _('How to create one (5 minutes)') }}</summary>
+			<ol style="margin:.6em 0 .2em 1.2em;line-height:1.7">
+				<li>{{ _('Sign up free at') }} <code>dash.cloudflare.com</code>.</li>
+				<li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Hello World</b> → <b>Deploy</b>.</li>
+				<li>{{ _('Open') }} <b>Edit code</b>, {{ _('replace the template with the wrtg Worker code and Deploy. Code and full guide:') }} <a href="{{ docs_url }}">Documentation</a>.</li>
+				<li>{{ _('Paste the') }} <code>name.username.workers.dev</code> {{ _('address above and Save &amp; Restart.') }}</li>
+			</ol>
+			<p><small>{{ _('Check:') }} <code>curl -i https://your-worker.workers.dev/apiws</code> → <code>426 Expected websocket</code>.</small></p>
+		</details>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
+		</div>
+	</form>
+	<form method="post" action="{{ url }}" style="margin-top:.4em">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="test_worker" />
+		<button class="cbi-button" type="submit">{{ _('Test') }}</button>
+	</form>
+</div>
+
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Logging and performance') }}</h3>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="wrtg-row">
+			<label><input type="hidden" name="_cb_verbose" value="1" /><input type="checkbox" name="cb_verbose" value="1" {{ verbose_on ? 'checked' : '' }} /> {{ _('Verbose logging (debug)') }}</label>
+			<small style="opacity:.7">{{ _('Noisy; the syslog ring buffer holds far less history with it on.') }}</small>
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('WS pool per slot') }}</label>
+			<input type="text" name="WRTG_WS_POOL_SIZE" value="{{ cfg_val(cfg, 'WRTG_WS_POOL_SIZE') }}" placeholder="2" style="width:6em" />
+			<small style="opacity:.7">{{ _('default 2, max 8') }}</small>
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Max connections') }}</label>
+			<input type="text" name="WRTG_MAX_CONNS" value="{{ cfg_val(cfg, 'WRTG_MAX_CONNS') }}" placeholder="1024" style="width:8em" />
+		</div>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
+		</div>
+	</form>
+</div>
+
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Connectivity check') }}</h3>
+	<p class="hint">{{ _('Probes DNS and WSS for the front, the Worker and CF Proxy — the same sweep as wrtg --check.') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="check" />
+		<button class="cbi-button cbi-button-apply" type="submit">{{ _('Run check') }}</button>
+	</form>
+	{% if (length(check_out)) { %}
+		<pre style="margin-top:10px;font-size:12px;max-height:20em;overflow:auto">{{ check_out }}</pre>
+	{% } %}
 </div>
 
 <div class="cbi-section" style="border:1px solid var(--border-color-medium,#4a4a4a);border-radius:8px;padding:14px 16px;margin-bottom:14px">

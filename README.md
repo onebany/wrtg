@@ -327,7 +327,7 @@ cf worker pool
 | `active` близко к `capacity` | Семафор соединений заканчивается (симптом зависания из 0.5.28). |
 | `all_paths_failed` растёт | Цепочка не сработала целиком. Считайте долю от суммы `ws_pool_hit + ws_direct + cf_proxy + tcp_fallback + all_paths_failed`; `blind_relay` для этого не годится, он растёт и на обычном не-MTProto трафике. |
 | `cf_proxy` = 0 при живом трафике | Ступень не используется. Проверьте `cf-proxies=N` в строке старта. |
-| `media_http_rejected` растёт | Фронт отвечает на media поверх MTProto-over-HTTP редиректом вместо данных. Картинки и стикеры будут грузиться вечно. |
+| `media_http_rejected` растёт | Часть media клиент тянет через MTProto-over-HTTP на :80, и фронт отвечает на них редиректом. Клиент повторяет запрос по :443, поэтому картинки грузятся; счётчик показывает, сколько таких лишних кругов. |
 | `passthrough_no_data` растёт | Worker поднимает туннель, но до DC не доходит. |
 
 ### `wrtg --check`
@@ -370,7 +370,7 @@ logread -e wrtg | grep -i 'CF proxy'
 |---------|---------------|
 | Telegram не подключается | `wrtg --check`, nft rules, `ROUTER_IP`/`LAN_IF` |
 | HTTP 302 на WS | Настройте `CF_WORKER_DOMAIN` |
-| Media/CDN не грузятся | Сначала `media_http_rejected` в `--stats`. Растёт — фронт отдаёт редирект вместо данных, помочь может только живой Worker passthrough (`CF_WORKER_DOMAIN`, без `WRTG_NO_WORKER_PASSTHROUGH`) |
+| Media/CDN не грузятся | Worker passthrough: задан ли `CF_WORKER_DOMAIN` и не выставлен ли `WRTG_NO_WORKER_PASSTHROUGH` |
 | Медленный fallback | Задайте `WRTG_CFPROXY_AUTO="0"` и используйте свой Worker |
 | `passthrough_no_data` растёт в `--stats` | Клиент с собственным обходом DPI за wrtg — исключите его через `WRTG_SKIP_SRC` |
 | `curl: (28)` при установке | DPI провайдера дропает GitHub — [офлайн-установка](#офлайн-установка-github-недоступен-с-роутера) |
@@ -383,7 +383,6 @@ logread -e wrtg | grep -i 'CF proxy'
 - **IPv4 only** — `SO_ORIGINAL_DST` работает только с IPv4.
 - **Worker deploy.** Изменив `openwrt/cf-worker.js`, вы должны выкатить его в Cloudflare отдельно.
 - **Общий CF Proxy pool** проектом не контролируется: домены чужие и могут отвалиться в любой момент.
-- **Media поверх MTProto-over-HTTP.** Клиент тянет часть медиа запросами `POST /api` на порт 80. Фронт Telegram отвечает на них HTTP 302 при любом значении `Host`, а CF Proxy и Worker обслуживают только `/apiws`. Рабочего пути для этого транспорта сейчас нет; счётчик `media_http_rejected` показывает, насколько часто это происходит.
 
 ---
 

@@ -119,6 +119,14 @@ FRONT_IP="149.154.167.220"
 # WRTG_CFPROXY_429_MAX_COOLDOWN_SEC="300"  # max cooldown (seconds)
 # WRTG_CFPROXY_PARALLEL="2"                # parallel CF proxy fallback attempts
 # WRTG_CFPROXY_MAX_ATTEMPTS="3"            # CF proxy domains tried per session
+# The shared domain list refreshes itself from this URL. Point it at a mirror if
+# your ISP blocks the source (raw.githubusercontent.com resolves into a Fastly
+# range that some providers drop wholesale).
+# WRTG_CFPROXY_DOMAINS_URL=""              # default: Flowseal/tg-ws-proxy list
+# WRTG_CFPROXY_REFRESH_SEC="3600"          # default 3600, floor 300
+
+# Verbose daemon logging. Noisy: the syslog ring buffer holds far less history.
+# RUST_LOG="debug"
 # WRTG_DOH_CACHE_SEC="300"                 # DoH resolve cache TTL (seconds)
 
 # WebSocket / TCP keepalive for bridge relay sockets

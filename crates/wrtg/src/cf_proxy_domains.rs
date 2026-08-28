@@ -11,7 +11,58 @@ use crate::cf_balancer::{cf_fallback_disabled, set_proxy_domains};
 pub const CFPROXY_DOMAINS_URL: &str =
     "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt";
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
+const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
+/// Floor for the refresh interval. The list changes a few times a year, so
+/// nothing is gained by polling faster, and a mistyped value would otherwise
+/// have every router hitting the source in a loop.
+const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
+fn parse_refresh_interval(raw: Option<&str>) -> Duration {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .map(|d| d.max(MIN_REFRESH_INTERVAL))
+        .unwrap_or(DEFAULT_REFRESH_INTERVAL)
+}
+
+fn parse_domains_url(raw: Option<&str>) -> String {
+    raw.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(CFPROXY_DOMAINS_URL)
+        .to_string()
+}
+
+/// Where the shared domain list is fetched from. `WRTG_CFPROXY_DOMAINS_URL`
+/// points it at a mirror — useful where the ISP blocks the Fastly range that
+/// raw.githubusercontent.com resolves to.
+fn domains_url() -> String {
+    parse_domains_url(std::env::var("WRTG_CFPROXY_DOMAINS_URL").ok().as_deref())
+}
+
+/// Split `https://host/path` into its host and path. Anything unparseable
+/// falls back to the built-in source rather than failing the refresh.
+fn split_https_url(url: &str) -> (String, String) {
+    let rest = match url.strip_prefix("https://") {
+        Some(r) => r,
+        None => return default_host_path(),
+    };
+    match rest.split_once('/') {
+        Some((host, path)) if !host.is_empty() && !path.is_empty() => {
+            (host.to_string(), format!("/{path}"))
+        }
+        _ => default_host_path(),
+    }
+}
+
+fn default_host_path() -> (String, String) {
+    (
+        "raw.githubusercontent.com".to_string(),
+        "/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt".to_string(),
+    )
+}
+
+fn refresh_interval() -> Duration {
+    parse_refresh_interval(std::env::var("WRTG_CFPROXY_REFRESH_SEC").ok().as_deref())
+}
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_HTTP_RESPONSE: usize = 1024 * 1024;
 const MIN_VALID_DOMAINS: usize = 3;
@@ -162,9 +213,11 @@ pub async fn fetch_cfproxy_domains() -> Vec<String> {
         .take(7)
         .map(char::from)
         .collect();
-    let path = format!("/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt?{cache_bust}");
+    let url = domains_url();
+    let (host, base_path) = split_https_url(&url);
+    let path = format!("{base_path}?{cache_bust}");
 
-    let body = match https_get("raw.githubusercontent.com", &path, FETCH_TIMEOUT).await {
+    let body = match https_get(&host, &path, FETCH_TIMEOUT).await {
         Ok(b) => b,
         Err(e) => {
             log::warn!("Failed to fetch CF proxy domain list: {e}");
@@ -221,7 +274,7 @@ pub fn start_cfproxy_refresh_task() {
     tokio::spawn(async {
         refresh_cfproxy_domains().await;
         loop {
-            tokio::time::sleep(REFRESH_INTERVAL).await;
+            tokio::time::sleep(refresh_interval()).await;
             refresh_cfproxy_domains().await;
         }
     });
@@ -276,6 +329,39 @@ async fn https_get(host: &str, path: &str, connect_timeout: Duration) -> std::io
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_interval_is_floored_so_a_typo_cannot_hammer_the_source() {
+        assert_eq!(parse_refresh_interval(Some("7200")), Duration::from_secs(7200));
+        assert_eq!(parse_refresh_interval(None), DEFAULT_REFRESH_INTERVAL);
+        // A stray "5" would mean twelve requests a minute, every hour of the day.
+        assert_eq!(parse_refresh_interval(Some("5")), MIN_REFRESH_INTERVAL);
+        assert_eq!(parse_refresh_interval(Some("nonsense")), DEFAULT_REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn a_custom_source_is_split_into_host_and_path() {
+        assert_eq!(
+            split_https_url("https://mirror.example/wrtg/list.txt"),
+            ("mirror.example".to_string(), "/wrtg/list.txt".to_string())
+        );
+        // Anything unparseable falls back to the built-in source rather than
+        // leaving the router with no refresh at all.
+        assert_eq!(split_https_url("http://no-tls.example/x"), default_host_path());
+        assert_eq!(split_https_url("https://host-only.example"), default_host_path());
+    }
+
+    #[test]
+    fn a_custom_domain_source_replaces_the_default() {
+        // Some ISPs block the Fastly range raw.githubusercontent.com lives on,
+        // which leaves the router unable to refresh; a mirror gets it back.
+        assert_eq!(
+            parse_domains_url(Some(" https://mirror.example/list.txt ")),
+            "https://mirror.example/list.txt"
+        );
+        assert_eq!(parse_domains_url(None), CFPROXY_DOMAINS_URL);
+        assert_eq!(parse_domains_url(Some("   ")), CFPROXY_DOMAINS_URL);
+    }
 
     #[test]
     fn decode_cfproxy_domain_shifts_and_replaces_suffix() {
