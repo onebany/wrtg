@@ -41,7 +41,20 @@ use crate::ws_pool::{acquire, schedule_refill};
 const WS_CHANNEL_CAP: usize = 32;
 const WS_SEND_BATCH_MAX: usize = 32;
 const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
-const MAX_CF_PROXY_ATTEMPTS: usize = 3;
+/// CF proxy base domains tried per session: the first sequentially, the rest as
+/// a parallel race. Raise it when the shared pool is patchy — its working share
+/// has been measured between 6 and 16 of 20 domains depending on the DC, so
+/// three picks can all land on dead ones. `WRTG_CFPROXY_MAX_ATTEMPTS` overrides.
+fn max_cf_proxy_attempts() -> usize {
+    static N: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::env::var("WRTG_CFPROXY_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(3)
+    });
+    *N
+}
 /// Grace period for the surviving bridge direction to flush data it has
 /// already read after the other direction ends — an instant abort would drop
 /// the tail of the session.
@@ -694,7 +707,7 @@ pub async fn try_cf_fallback(
     // CF Proxy balancer: primary sequential, then parallel race
     let cf_domains: Vec<_> = proxy_domains_for_dc(hs.dc)
         .into_iter()
-        .take(MAX_CF_PROXY_ATTEMPTS)
+        .take(max_cf_proxy_attempts())
         .collect();
 
     if let Some(primary) = cf_domains.first() {

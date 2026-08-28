@@ -6,7 +6,8 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::cf_proxy_cooldown::{
-    cf_proxy_cooldown_remaining, clear_cf_proxy_429_cooldown, mark_cf_proxy_429_cooldown,
+    cf_proxy_cooldown_remaining, cf_proxy_cooldown_remaining_for, clear_cf_proxy_429_cooldown,
+    clear_cf_proxy_dead, mark_cf_proxy_429_cooldown, mark_cf_proxy_dead,
 };
 use crate::cf_proxy_doh::resolve_doh;
 use crate::ws::{connect_ws_with_headers, is_ws_http_status, RawWebSocket, WsConnectError};
@@ -136,6 +137,18 @@ pub async fn try_cf_proxy_domain(
         )));
     }
 
+    let dead = cf_proxy_cooldown_remaining_for(cf_domain, dc);
+    if dead > Duration::ZERO {
+        log::debug!(
+            "CF proxy skip {cf_domain} DC{dc}: fault cooldown {:.0}s",
+            dead.as_secs_f64().ceil()
+        );
+        return Err(WsConnectError::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "CF proxy domain in fault cooldown",
+        )));
+    }
+
     let _permit = CFPROXY_SEM.clone().acquire_owned().await.map_err(|_| {
         WsConnectError::Io(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
@@ -146,13 +159,17 @@ pub async fn try_cf_proxy_domain(
     match connect_cf_proxy_ws(cf_domain, dc, is_media, connect_timeout).await {
         Ok(ws) => {
             clear_cf_proxy_429_cooldown(cf_domain);
+            clear_cf_proxy_dead(cf_domain, dc);
             Ok(ws)
         }
         Err(e) if is_ws_http_status(&e, 429) => {
             mark_cf_proxy_429_cooldown(cf_domain, &e);
             Err(e)
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            mark_cf_proxy_dead(cf_domain, dc, &e);
+            Err(e)
+        }
     }
 }
 

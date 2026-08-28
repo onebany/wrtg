@@ -118,6 +118,12 @@ FRONT_IP="149.154.167.220"
 # WRTG_CFPROXY_429_COOLDOWN_SEC="45"       # initial cooldown (seconds)
 # WRTG_CFPROXY_429_MAX_COOLDOWN_SEC="300"  # max cooldown (seconds)
 # WRTG_CFPROXY_PARALLEL="2"                # parallel CF proxy fallback attempts
+# WRTG_CFPROXY_MAX_ATTEMPTS="3"            # CF proxy domains tried per session
+# A domain answering 404/503 for a DC is parked for this long instead of being
+# re-dialled by every later session. The shared pool is uneven: a zone can serve
+# kws4 and 404 on kws2, so the cooldown is per (domain, DC).
+# WRTG_CFPROXY_FAIL_COOLDOWN_SEC="600"     # default 600 (10 min)
+# WRTG_CFPROXY_FAIL_MAX_COOLDOWN_SEC="3600"  # default 3600 (1 hour)
 # WRTG_DOH_CACHE_SEC="300"                 # DoH resolve cache TTL (seconds)
 
 # WebSocket / TCP keepalive for bridge relay sockets

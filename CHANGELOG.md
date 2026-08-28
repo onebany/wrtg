@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.37 - 2026-08-28
+
+### Fixed
+- **Dead CF Proxy domains were re-dialled by every session** — only HTTP 429 earned a cooldown, so a domain answering 404 or 503 was picked again by the next connection, and the one after that. Measured on a live router: 212 CF Proxy connections against 218 answers of 404/503, so nearly half of all attempts went into domains already known to be broken. With three domains tried per session, a session could draw three dead ones and fall through to blind relay. Those statuses now park the domain, 502 stays exempt — the Worker script serves it for an unreachable destination, which says nothing about the domain.
+- **The cooldown is per (domain, DC), not per domain** — the shared pool is uneven: the same zone can serve `kws4` and answer 404 on `kws2`. A per-domain cooldown would retire a domain most DCs still reach. Probing the live pool gave between 6 and 16 working domains out of 20 depending on the DC.
+
+### Changed
+- **`WRTG_CFPROXY_MAX_ATTEMPTS` replaces a compiled-in 3.** With a pool that patchy, three picks are not always enough, and the number was not reachable without a rebuild.
+- **New settings are editable in LuCI** (Services → wrtg → Configuration): the shared-pool switch `WRTG_CFPROXY_AUTO`, `WRTG_CFPROXY_MAX_ATTEMPTS` and `WRTG_CFPROXY_FAIL_COOLDOWN_SEC`. Previously the pool switch could only be set by editing the config file by hand.
+
 ## 0.5.36 - 2026-08-24
 
 ### Fixed

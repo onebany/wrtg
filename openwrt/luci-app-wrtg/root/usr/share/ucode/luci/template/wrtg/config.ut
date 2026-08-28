@@ -66,7 +66,8 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	let saved = false;
 	if (form == 'quick') {
 		let text = readfile(cfg_path) ?? '';
-		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN']) {
+		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN',
+		               'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS', 'WRTG_CFPROXY_FAIL_COOLDOWN_SEC']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
@@ -213,7 +214,22 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		<div class="cbi-value">
 			<label class="cbi-value-title">CF_PROXY_DOMAIN</label>
 			<div class="cbi-value-field"><input type="text" name="CF_PROXY_DOMAIN" value="{{ cfg_val(cfg, 'CF_PROXY_DOMAIN') }}" style="width:30em" />
-				<div class="cbi-value-description">{{ _('Optional CF-proxied domain(s). Public pool is opt-in (WRTG_CFPROXY_AUTO).') }}</div></div>
+				<div class="cbi-value-description">{{ _('Your own CF-proxied domain(s). Leave empty to use the shared pool.') }}</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">WRTG_CFPROXY_AUTO</label>
+			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_AUTO" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_AUTO') }}" placeholder="1" style="width:8em" />
+				<div class="cbi-value-description">{{ _('Shared CF proxy pool: 1 = on (default when no CF_PROXY_DOMAIN), 0 = off. Off leaves DC1/DC3/DC5 with no path.') }}</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">WRTG_CFPROXY_MAX_ATTEMPTS</label>
+			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_MAX_ATTEMPTS" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_MAX_ATTEMPTS') }}" placeholder="3" style="width:8em" />
+				<div class="cbi-value-description">{{ _('CF proxy domains tried per session (default 3). Raise it when the shared pool is patchy.') }}</div></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title">WRTG_CFPROXY_FAIL_COOLDOWN_SEC</label>
+			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_FAIL_COOLDOWN_SEC" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_FAIL_COOLDOWN_SEC') }}" placeholder="600" style="width:8em" />
+				<div class="cbi-value-description">{{ _('How long a domain answering 404/503 for a DC is skipped (default 600 s).') }}</div></div>
 		</div>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
