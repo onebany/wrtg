@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.39 - 2026-08-28
+
+### Fixed
+- **The CF Proxy fault cooldown from 0.5.37/0.5.38 is withdrawn.** The premise was that re-dialling a domain which answers 404/503 wastes attempts a session cannot spare. Measured against the alternative on the same router, over the same three-minute window and the same traffic, it was wrong: with the cooldown, `all_paths_failed` ran at 102 per three minutes against 330 accepted; without it, 1 against 131. Parking domains shrinks the candidate set faster than the pool recovers, and the plain round-robin over all 20 domains finds a working one more often than a filtered list of three does. Reverted to the 0.5.36 behaviour.
+
+### Changed
+- **`WRTG_CFPROXY_MAX_ATTEMPTS`** still replaces the compiled-in 3, and it and `WRTG_CFPROXY_AUTO` are editable in LuCI (Services → wrtg → Configuration). Raising the attempt count is the one lever this episode did not disprove: the shared pool runs 6 to 16 working domains out of 20 depending on the DC, and three picks are drawn from that.
+
 ## 0.5.38 - 2026-08-28
 
 ### Fixed

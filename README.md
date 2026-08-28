@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 0.5.38 · **Last updated:** 2026-08-28
+**Version:** 0.5.39 · **Last updated:** 2026-08-28
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
@@ -194,8 +194,6 @@ DC1/DC3/DC5 часто отвечают HTTP 302 на direct WS — для ни�
 | `WRTG_CFPROXY_429_MAX_COOLDOWN_SEC` | Макс. 429 cooldown | `300` |
 | `WRTG_CFPROXY_PARALLEL` | Параллельные CF Proxy попытки | `2` |
 | `WRTG_CFPROXY_MAX_ATTEMPTS` | Доменов на сессию | `3` |
-| `WRTG_CFPROXY_FAIL_COOLDOWN_SEC` | Пауза для домена после 404/503 | `600` |
-| `WRTG_CFPROXY_FAIL_MAX_COOLDOWN_SEC` | Потолок этой паузы | `3600` |
 | `WRTG_DOH_CACHE_SEC` | DoH cache TTL | `300` |
 
 ### Keepalive
@@ -362,7 +360,7 @@ logread -e wrtg | grep -i 'CF proxy'
 
 Домены общего пула публикуют только поддомены `kws{N}.<домен>`. У самого домена A-записи нет, а media-хостов `kws{N}-1.<домен>` не существует, поэтому media через CF Proxy не ходит.
 
-Пул неоднороден: один и тот же домен может обслуживать `kws4` и отвечать 404 на `kws2`. Замер на живом пуле дал от 6 до 16 рабочих доменов из 20 в зависимости от DC. Поэтому домен, ответивший 404 или 503, откладывается **для этого DC**, а не целиком, — иначе рабочие DC ушли бы в отказ вместе со сломанным. Настраивается через `WRTG_CFPROXY_FAIL_COOLDOWN_SEC` и правится в LuCI.
+Пул неоднороден: один и тот же домен может обслуживать `kws4` и отвечать 404 на `kws2`. Замер на живом пуле дал от 6 до 16 рабочих доменов из 20 в зависимости от DC. Если пул часто мимо, поднимите `WRTG_CFPROXY_MAX_ATTEMPTS` — доменов на сессию.
 
 Если pool нестабилен, задайте `WRTG_CFPROXY_AUTO="0"` и поднимите свой Worker или домен.
 

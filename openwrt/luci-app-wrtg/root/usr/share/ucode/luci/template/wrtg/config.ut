@@ -67,7 +67,7 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	if (form == 'quick') {
 		let text = readfile(cfg_path) ?? '';
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN', 'CF_PROXY_DOMAIN',
-		               'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS', 'WRTG_CFPROXY_FAIL_COOLDOWN_SEC']) {
+		               'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
@@ -225,11 +225,6 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 			<label class="cbi-value-title">WRTG_CFPROXY_MAX_ATTEMPTS</label>
 			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_MAX_ATTEMPTS" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_MAX_ATTEMPTS') }}" placeholder="3" style="width:8em" />
 				<div class="cbi-value-description">{{ _('CF proxy domains tried per session (default 3). Raise it when the shared pool is patchy.') }}</div></div>
-		</div>
-		<div class="cbi-value">
-			<label class="cbi-value-title">WRTG_CFPROXY_FAIL_COOLDOWN_SEC</label>
-			<div class="cbi-value-field"><input type="text" name="WRTG_CFPROXY_FAIL_COOLDOWN_SEC" value="{{ cfg_val(cfg, 'WRTG_CFPROXY_FAIL_COOLDOWN_SEC') }}" placeholder="600" style="width:8em" />
-				<div class="cbi-value-description">{{ _('How long a domain answering 404/503 for a DC is skipped (default 600 s).') }}</div></div>
 		</div>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
