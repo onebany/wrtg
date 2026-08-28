@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.38 - 2026-08-28
+
+### Fixed
+- **The 0.5.37 cooldown made things worse and is corrected here** — parking a domain did not stop it being *picked*. It stayed in the candidate list, failed instantly on the cooldown check, and burned one of the three attempts a session gets. With half the shared pool broken a session spent its whole budget on domains already known to answer 404 and never reached a working one. Measured on the same router within minutes of the upgrade: `cf_proxy` went from 17/min to 0 and `all_paths_failed` from 1/min to 74/min. Parked domains are now filtered out before the attempt budget is applied. If every domain is parked the unfiltered head is used anyway — dialling one that failed ten minutes ago beats skipping the rung and blind-relaying into a blocked IP.
+
 ## 0.5.37 - 2026-08-28
 
 ### Fixed

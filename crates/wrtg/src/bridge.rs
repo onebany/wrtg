@@ -12,6 +12,7 @@ use crate::cf_balancer::{
     worker_domains_for_dc, worker_passthrough_disabled,
 };
 use crate::cf_proxy::try_cf_proxy_domain;
+use crate::cf_proxy_cooldown::cf_proxy_cooldown_remaining_for;
 use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429_with_peers, usable_workers};
 use crate::cf_worker_pool::{acquire as acquire_cf_worker, schedule_refill as schedule_cf_refill};
 use crate::fronting::{
@@ -45,6 +46,30 @@ const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// a parallel race. Raise it when the shared pool is patchy — its working share
 /// has been measured between 6 and 16 of 20 domains depending on the DC, so
 /// three picks can all land on dead ones. `WRTG_CFPROXY_MAX_ATTEMPTS` overrides.
+/// Domains a session will actually dial: those not parked by a fault cooldown,
+/// capped at the attempt budget.
+///
+/// The filter has to run *before* the cap, not inside the dial. A parked domain
+/// left in the list still consumes one of the three picks a session gets, and
+/// with half the shared pool broken a session then spends its whole budget on
+/// domains already known to answer 404 — which is how the first version of this
+/// cooldown drove `all_paths_failed` from 1/min to 74/min on a live router.
+///
+/// When every domain is parked, hand back the unfiltered head: dialling one
+/// that failed ten minutes ago still beats skipping the rung entirely.
+fn cf_proxy_candidates(domains: Vec<String>, dc: i32, limit: usize) -> Vec<String> {
+    let live: Vec<String> = domains
+        .iter()
+        .filter(|d| cf_proxy_cooldown_remaining_for(d, dc) == Duration::ZERO)
+        .take(limit)
+        .cloned()
+        .collect();
+    if live.is_empty() {
+        return domains.into_iter().take(limit).collect();
+    }
+    live
+}
+
 fn max_cf_proxy_attempts() -> usize {
     static N: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
         std::env::var("WRTG_CFPROXY_MAX_ATTEMPTS")
@@ -705,10 +730,8 @@ pub async fn try_cf_fallback(
     }
 
     // CF Proxy balancer: primary sequential, then parallel race
-    let cf_domains: Vec<_> = proxy_domains_for_dc(hs.dc)
-        .into_iter()
-        .take(max_cf_proxy_attempts())
-        .collect();
+    let cf_domains =
+        cf_proxy_candidates(proxy_domains_for_dc(hs.dc), hs.dc, max_cf_proxy_attempts());
 
     if let Some(primary) = cf_domains.first() {
         log::debug!("[{label}] DC{} -> trying CF proxy {primary}", hs.dc);
@@ -1332,5 +1355,46 @@ mod tests {
         let act = Activity::new();
         let res = tokio::time::timeout(Duration::from_secs(3600), act.idle_reached(None)).await;
         assert!(res.is_err(), "a disabled idle guard must never resolve");
+    }
+
+    fn dead_err() -> crate::ws::WsConnectError {
+        crate::ws::WsConnectError::Handshake(crate::ws::WsHandshakeError {
+            status_code: 503,
+            status_line: "HTTP/1.1 503".to_string(),
+            headers: std::collections::HashMap::new(),
+        })
+    }
+
+    #[test]
+    fn parked_domains_do_not_consume_the_attempt_budget() {
+        // The budget is small and half the shared pool can be broken, so a
+        // parked domain left in the candidate list burns one of the few picks
+        // a session gets and it never reaches a working domain.
+        let all: Vec<String> = vec![
+            "a1.example".into(),
+            "a2.example".into(),
+            "a3.example".into(),
+        ];
+        crate::cf_proxy_cooldown::mark_cf_proxy_dead("a1.example", 7, &dead_err());
+        let got = cf_proxy_candidates(all, 7, 2);
+        assert_eq!(
+            got,
+            vec!["a2.example".to_string(), "a3.example".to_string()]
+        );
+        crate::cf_proxy_cooldown::clear_cf_proxy_dead("a1.example", 7);
+    }
+
+    #[test]
+    fn every_domain_parked_still_yields_candidates() {
+        // Trying a domain that failed ten minutes ago still beats skipping the
+        // rung and blind-relaying into a blocked IP.
+        let all: Vec<String> = vec!["b1.example".into(), "b2.example".into()];
+        for d in &all {
+            crate::cf_proxy_cooldown::mark_cf_proxy_dead(d, 8, &dead_err());
+        }
+        assert_eq!(cf_proxy_candidates(all.clone(), 8, 1), vec!["b1.example"]);
+        for d in &all {
+            crate::cf_proxy_cooldown::clear_cf_proxy_dead(d, 8);
+        }
     }
 }
