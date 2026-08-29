@@ -41,6 +41,7 @@ load_config() {
 	WRTG_CFPROXY_DOMAINS_URL=""
 	WRTG_CFPROXY_REFRESH_SEC=""
 	RUST_LOG=""
+	WRTG_LANG=""
 	WRTG_DOH_CACHE_SEC=""
 	WRTG_WS_PING_SEC=""
 	WRTG_TCP_KEEPALIVE_SEC=""
@@ -87,6 +88,7 @@ load_config() {
 	WRTG_CFPROXY_DOMAINS_URL=$(printf '%s' "$WRTG_CFPROXY_DOMAINS_URL" | tr -d '\r')
 	WRTG_CFPROXY_REFRESH_SEC=$(printf '%s' "$WRTG_CFPROXY_REFRESH_SEC" | tr -d '\r')
 	RUST_LOG=$(printf '%s' "$RUST_LOG" | tr -d '\r')
+	WRTG_LANG=$(printf '%s' "$WRTG_LANG" | tr -d '\r')
 	WRTG_CFPROXY_429_MAX_COOLDOWN_SEC=$(printf '%s' "$WRTG_CFPROXY_429_MAX_COOLDOWN_SEC" | tr -d '\r')
 	WRTG_CF_WORKER_429_COOLDOWN_SEC=$(printf '%s' "$WRTG_CF_WORKER_429_COOLDOWN_SEC" | tr -d '\r')
 	WRTG_CF_WORKER_429_MAX_COOLDOWN_SEC=$(printf '%s' "$WRTG_CF_WORKER_429_MAX_COOLDOWN_SEC" | tr -d '\r')

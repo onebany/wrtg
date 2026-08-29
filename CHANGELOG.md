@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 - 2026-08-29
+
+### Added
+- **The LuCI app speaks Russian and English**, switched on the settings page: follow LuCI, English or Russian (`WRTG_LANG`). All 138 strings across the five pages are translated; anything untranslated falls through to the English source rather than showing a blank.
+
+  LuCI resolves `_()` against binary `.lmo` catalogues built by `po2lmo`, which lives on an OpenWrt build host — not on a router, and not in the plain file-copy install this project uses. The catalogue is therefore an ucode module the pages load and shadow `_()` with, which also gives the app its own switch instead of tying it to the global LuCI language.
+
 ## 1.0.0 - 2026-08-28
 
 Same daemon that has been relaying on four routers for months, with the

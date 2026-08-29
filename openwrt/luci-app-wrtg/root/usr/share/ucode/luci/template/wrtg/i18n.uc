@@ -1,0 +1,172 @@
+// Russian catalogue for the wrtg LuCI app.
+//
+// LuCI resolves _() against binary .lmo catalogues, which need po2lmo from the
+// OpenWrt build host — not something a router has, and not something the plain
+// file-copy install this project uses can produce. The app also wants its own
+// switch rather than following the global LuCI language, so the catalogue lives
+// here and each template shadows _() with a lookup into it. Untranslated
+// strings fall through to the English source.
+
+const RU = {
+	" and reloaded.": " и перезагружено.",
+	"2,4 (default) · all · none · list": "2,4 (по умолчанию) · all · none · список",
+	"Add mapping": "Добавить правило",
+	"Added mapping ": "Добавлено правило ",
+	"Already up to date.": "Уже актуальная версия.",
+	"An update is already in progress.": "Обновление уже идёт.",
+	"Apply": "Применить",
+	"CF Proxy probe finished.": "Проверка CF Proxy завершена.",
+	"CF Worker": "CF Worker",
+	"CF Worker code for Cloudflare": "CF Worker — код для Cloudflare",
+	"CF Worker probe finished.": "Проверка CF Worker завершена.",
+	"CIDR nets": "CIDR-сетей",
+	"Check first; Update enables when a newer release exists": "Сначала проверьте: кнопка станет активной, когда выйдет новая версия",
+	"Check for updates": "Проверить обновления",
+	"Check:": "Проверка:",
+	"Clear": "Очистить",
+	"Clear all learned DC mappings?": "Удалить все выученные соответствия DC?",
+	"Config reloaded live (SIGHUP).": "Конфиг перечитан на лету (SIGHUP).",
+	"Config syntax is invalid; changes were not saved.": "Синтаксис конфига неверный, изменения не сохранены.",
+	"Connectivity check": "Проверка связи",
+	"Connectivity check finished.": "Проверка связи завершена.",
+	"Copy the worker code": "Скопировать код воркера",
+	"DC learn (IP → DC)": "Обучение DC (IP → DC)",
+	"DC → IP learning": "Обучение IP → DC",
+	"DC1/3/5 need a Worker — see Documentation → CF Worker Setup": "DC1/3/5 нужен Worker: см. Документация → CF Worker",
+	"DC2/DC4 → front · DC1/3/5 → CF worker (real IP). \"302/blacklist\" means that DC needs a Worker.": "DC2/DC4 → фронт · DC1/3/5 → CF worker (реальный IP). «302/blacklist» значит, что этому DC нужен Worker.",
+	"DCs via the front": "DC через фронт",
+	"Document not found. Re-run install.sh to deploy documentation.": "Документ не найден. Запустите install.sh ещё раз, чтобы выложить документацию.",
+	"Domains per session": "Доменов на сессию",
+	"Downloads from GitHub releases (onebany/wrtg). Keeps /etc/wrtg/config and restarts the service.": "Скачивает релизы с GitHub (onebany/wrtg). Конфиг /etc/wrtg/config сохраняется, служба перезапускается.",
+	"English": "English",
+	"Follow LuCI": "Как в LuCI",
+	"Forget learned map": "Забыть выученное",
+	"How to create one (5 minutes)": "Как создать свой (5 минут)",
+	"Installed": "Установлено",
+	"Installed version is newer than the latest GitHub release.": "Установленная версия новее последнего релиза на GitHub.",
+	"Invalid IP or DC (expect IPv4 and DC 1-5 or 203).": "Неверный IP или DC (нужен IPv4 и DC 1-5 или 203).",
+	"Invalid request token.": "Неверный токен запроса.",
+	"Language": "Язык",
+	"Last rung before blind relay, and the only path DC1/DC3/DC5 have without a Worker.": "Последняя ступень перед blind relay и единственный путь для DC1/DC3/DC5, если нет своего Worker.",
+	"Latest": "Доступно",
+	"Learned DC map cleared and reloaded.": "Выученная карта DC очищена, конфиг перезагружен.",
+	"Learned file: /etc/wrtg/dc-ips-learned.txt · Admin file: /etc/wrtg/dc-ips.txt · Env: WRTG_DC_LEARN_FILE / WRTG_DC_IPS_FILE": "Выученное: /etc/wrtg/dc-ips-learned.txt · Ручное: /etc/wrtg/dc-ips.txt · Переменные: WRTG_DC_LEARN_FILE / WRTG_DC_IPS_FILE",
+	"Learned mappings": "Выученные соответствия",
+	"List URL": "Адрес списка",
+	"Listen": "Слушает",
+	"Logging and performance": "Логи и производительность",
+	"Max connections": "Максимум соединений",
+	"No learned entries yet. Hand-edit /etc/wrtg/dc-ips.txt (IP DC [media]) or wait for clients that embed the DC in the handshake.": "Пока ничего не выучено. Добавьте вручную в /etc/wrtg/dc-ips.txt (IP DC [media]) или дождитесь клиентов, которые указывают DC в handshake.",
+	"No update available. Click “Check for updates” first.": "Обновления нет. Сначала нажмите «Проверить обновления».",
+	"Noisy; the syslog ring buffer holds far less history with it on.": "Шумно: с ним в кольцевом буфере syslog помещается заметно меньше истории.",
+	"One rule per line, format number:IP. These win over the global front below — leave empty to use it for every DC in scope.": "По одному правилу на строку, формат номер:IP. Они важнее общего фронта ниже; оставьте пустым, чтобы фронт применялся ко всем DC из области.",
+	"Open": "Откройте",
+	"Own domain": "Свой домен",
+	"Paste the": "Вставьте адрес",
+	"Per-DC last outcome": "Последний результат по DC",
+	"Pools/TTL, LISTEN and new variables need a restart (not reload).": "Пулы, TTL, LISTEN и новые переменные требуют перезапуска, а не перезагрузки конфига.",
+	"Probes DNS and WSS for the front, the Worker and CF Proxy — the same sweep as wrtg --check.": "Проверяет DNS и WSS для фронта, Worker и CF Proxy — то же, что wrtg --check.",
+	"Quick filter:": "Быстрый фильтр:",
+	"Raise it when the shared pool is patchy": "Поднимите, если общий пул работает через раз",
+	"Raw config": "Конфиг целиком",
+	"Raw config saved.": "Конфиг сохранён.",
+	"Reachable Telegram front": "Доступный фронт Telegram",
+	"Recent activity (last 400 log lines)": "Недавняя активность (последние 400 строк лога)",
+	"Refresh": "Обновить",
+	"Refresh, seconds": "Обновление, секунд",
+	"Restart": "Перезапустить",
+	"Routing": "Маршрутизация",
+	"Run check": "Запустить проверку",
+	"Russian": "Русский",
+	"Save": "Сохранить",
+	"Save & Reload": "Сохранить и перечитать",
+	"Save & Restart": "Сохранить и перезапустить",
+	"Save raw": "Сохранить конфиг",
+	"Saved. Restart wrtg to apply pools/scope changes.": "Сохранено. Перезапустите wrtg, чтобы применить изменения пулов и области.",
+	"Secret": "Секрет",
+	"Service": "Служба",
+	"Service restarted.": "Служба перезапущена.",
+	"Shared pool: source and refresh": "Общий пул: источник и обновление",
+	"Show the worker code (cf-worker.js)": "Показать код воркера (cf-worker.js)",
+	"Sign up free at": "Зарегистрируйтесь бесплатно на",
+	"Start": "Запустить",
+	"Starting update …": "Запускаю обновление …",
+	"Status": "Статус",
+	"Stop": "Остановить",
+	"Telegram data centres (DC → IP)": "Датацентры Telegram (DC → IP)",
+	"Test": "Тест",
+	"The list is fetched on a timer and kept up to date on its own. Point it at a mirror if your ISP blocks the source.": "Список скачивается по таймеру и поддерживает себя сам. Укажите зеркало, если провайдер блокирует источник.",
+	"Update": "Обновить",
+	"Update available — see versions below, then click Update.": "Доступно обновление: сверьте версии ниже и нажмите «Обновить».",
+	"Update started — installing in the background …": "Обновление запущено, ставится в фоне …",
+	"Updates": "Обновления",
+	"Use the shared domain pool": "Использовать общий пул доменов",
+	"Verbose logging (debug)": "Подробное логирование (debug)",
+	"Version": "Версия",
+	"Version check failed (empty response).": "Проверка версии не удалась (пустой ответ).",
+	"Version check finished.": "Проверка версии завершена.",
+	"WS pool per slot": "Пул WS на слот",
+	"When creating a Worker in the Cloudflare Dashboard (Workers & Pages → Create → Worker → Edit code), replace the editor contents with this file. Then add the WRTG_TOKEN secret (Settings → Variables and Secrets) and put the worker domain into the wrtg config.": "При создании Worker в Cloudflare Dashboard (Workers & Pages → Create → Worker → Edit code) замените содержимое редактора на этот файл. Затем добавьте секрет WRTG_TOKEN (Settings → Variables and Secrets) и укажите домен воркера в конфиге wrtg.",
+	"Worker domains": "Домены Worker",
+	"Your own free Worker. Faster than the shared pool and it does not depend on domains other people run.": "Ваш собственный бесплатный Worker. Быстрее общего пула и не зависит от чужих доменов.",
+	"address above and Save &amp; Restart.": "выше и нажмите «Сохранить и перезапустить».",
+	"auto 5s": "авто 5 с",
+	"auto-refresh 5s": "автообновление 5 с",
+	"comma-separated": "через запятую",
+	"configured": "настроен",
+	"copied!": "Скопировано!",
+	"default 2, max 8": "по умолчанию 2, максимум 8",
+	"direct WS": "прямой WS",
+	"filter (e.g. DC1, CF worker, 302)": "фильтр (например DC1, CF worker, 302)",
+	"front passthrough": "проброс через фронт",
+	"idle": "простой",
+	"just updated": "только что обновлено",
+	"lines": "строк",
+	"loaded": "загружено",
+	"matches the Worker's WRTG_TOKEN": "совпадает с WRTG_TOKEN у Worker",
+	"minimum 300": "минимум 300",
+	"missing": "нет",
+	"newer than release": "новее релиза",
+	"not checked": "не проверялось",
+	"not set": "не задан",
+	"off": "выключено",
+	"own domain": "свой домен",
+	"present": "есть",
+	"replace the template with the wrtg Worker code and Deploy. Code and full guide:": "замените шаблон на код Worker для wrtg и нажмите Deploy. Код и полная инструкция:",
+	"running": "работает",
+	"shared pool on": "общий пул включён",
+	"stopped": "остановлена",
+	"up to date": "актуальная версия",
+	"update available": "есть обновление",
+	"via CF worker": "через CF worker",
+	"worker passthrough": "проброс через Worker",
+	"wrtg Documentation": "wrtg — Документация",
+	"wrtg Logs": "wrtg — Логи",
+	"wrtg Settings": "wrtg — Настройки",
+	"wrtg auto-learns which DC each Telegram IP belongs to. Add a manual override, or clear the learned map if it picked up a bad mapping. Both reload live.": "wrtg сам запоминает, какому DC принадлежит каждый IP Telegram. Можно добавить своё правило или очистить выученное, если попалось неверное. И то и другое применяется на лету.",
+	"wrtg — Telegram proxy": "wrtg — прокси Telegram",
+	"— check first": "— сначала проверьте",
+};
+
+// 'auto' follows LuCI's own language, anything else wins. Read straight from
+// the config file: the pages already parse it and this keeps the setting in one
+// place the user can also edit by hand.
+function pick_lang(cfg_text, luci_lang) {
+	let want = "";
+	for (let line in split(cfg_text ?? "", /[\r\n]+/)) {
+		line = trim(line);
+		if (substr(line, 0, 10) == "WRTG_LANG=")
+			want = lc(trim(replace(substr(line, 10), /"/g, "")));
+	}
+	if (want == "ru" || want == "en")
+		return want;
+	return (lc(luci_lang ?? "") == "ru") ? "ru" : "en";
+}
+
+function translator(lang) {
+	if (lang != "ru")
+		return function(s) { return s; };
+	return function(s) { return RU[s] ?? s; };
+}
+
+return { pick_lang, translator };

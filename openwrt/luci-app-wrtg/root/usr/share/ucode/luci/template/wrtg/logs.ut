@@ -3,7 +3,11 @@
 -#}
 
 {%
+import { readfile } from 'fs';
 import { popen } from 'fs';
+let wrtg_i18n = loadfile('/usr/share/ucode/luci/template/wrtg/i18n.uc')();
+let wrtg_lang = wrtg_i18n.pick_lang(readfile('/etc/wrtg/config') ?? '', ctx?.lang);
+let _ = wrtg_i18n.translator(wrtg_lang);
 
 let q = http.formvalue('q') ?? '';
 let n = http.formvalue('n') ?? '120';

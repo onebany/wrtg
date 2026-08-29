@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 1.0.0 · **Last updated:** 2026-08-28
+**Version:** 1.1.0 · **Last updated:** 2026-08-28
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
@@ -208,6 +208,7 @@ DC1/DC3/DC5 часто отвечают HTTP 302 на direct WS — для ни�
 | `WRTG_CFPROXY_429_MAX_COOLDOWN_SEC` | Макс. 429 cooldown | `300` |
 | `WRTG_CFPROXY_PARALLEL` | Параллельные CF Proxy попытки | `2` |
 | `WRTG_CFPROXY_MAX_ATTEMPTS` | Доменов на сессию | `3` |
+| `WRTG_LANG` | Язык LuCI-приложения: `auto` · `en` · `ru` | `auto` |
 | `WRTG_DOH_CACHE_SEC` | DoH cache TTL | `300` |
 
 ### Keepalive

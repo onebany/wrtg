@@ -174,7 +174,7 @@ check_deps() { # runs on the target (local install)
 }
 
 # ── LuCI ─────────────────────────────────────────────────────────────────────
-LUCI_FILES="status.ut config.ut logs.ut action.ut docs.ut"
+LUCI_FILES="status.ut config.ut logs.ut action.ut docs.ut i18n.uc"
 DOC_FILES="README.md"
 
 install_luci_local() {

@@ -4,6 +4,9 @@
 
 {%
 import { readfile, writefile, popen } from 'fs';
+let wrtg_i18n = loadfile('/usr/share/ucode/luci/template/wrtg/i18n.uc')();
+let wrtg_lang = wrtg_i18n.pick_lang(readfile('/etc/wrtg/config') ?? '', ctx?.lang);
+let _ = wrtg_i18n.translator(wrtg_lang);
 
 let cfg_path = '/etc/wrtg/config';
 let msg = '';
@@ -104,7 +107,7 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'WRTG_DC_IPS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN',
 		               'CF_PROXY_DOMAIN', 'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS',
 		               'WRTG_CFPROXY_DOMAINS_URL', 'WRTG_CFPROXY_REFRESH_SEC',
-		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS']) {
+		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS', 'WRTG_LANG']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
@@ -191,6 +194,8 @@ let cur_proxy = cfg_val(cfg, 'CF_PROXY_DOMAIN');
 let cf_auto_raw = cfg_val(cfg, 'WRTG_CFPROXY_AUTO');
 let cf_auto_on = length(cf_auto_raw) ? (cf_auto_raw == '1' || lc(cf_auto_raw) == 'true') : !length(cur_proxy);
 let verbose_on = lc(cfg_val(cfg, 'RUST_LOG')) == 'debug';
+let cur_lang_set = lc(cfg_val(cfg, 'WRTG_LANG'));
+if (cur_lang_set != 'en' && cur_lang_set != 'ru') cur_lang_set = 'auto';
 let default_domains_url = 'https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt';
 let url = dispatcher.build_url('admin', 'services', 'wrtg', 'config');
 let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
@@ -213,6 +218,22 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 .wrtg-help summary { cursor:pointer; font-size:12px; opacity:.75; }
 .wrtg-help p, .wrtg-help ol { font-size:12px; opacity:.85; }
 </style>
+
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Language') }}</h3>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="wrtg-row">
+			<select name="WRTG_LANG" style="width:14em">
+				<option value="auto" {{ cur_lang_set == 'auto' ? 'selected' : '' }}>{{ _('Follow LuCI') }}</option>
+				<option value="en" {{ cur_lang_set == 'en' ? 'selected' : '' }}>{{ _('English') }}</option>
+				<option value="ru" {{ cur_lang_set == 'ru' ? 'selected' : '' }}>{{ _('Russian') }}</option>
+			</select>
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Apply') }}" />
+		</div>
+	</form>
+</div>
 
 <div class="cbi-card wrtg-card">
 	<h3>{{ _('Telegram data centres (DC → IP)') }}</h3>

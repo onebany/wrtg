@@ -125,6 +125,9 @@ FRONT_IP="149.154.167.220"
 # WRTG_CFPROXY_DOMAINS_URL=""              # default: Flowseal/tg-ws-proxy list
 # WRTG_CFPROXY_REFRESH_SEC="3600"          # default 3600, floor 300
 
+# LuCI app language: auto (follow LuCI), en, ru. Editable on the settings page.
+# WRTG_LANG="auto"
+
 # Verbose daemon logging. Noisy: the syslog ring buffer holds far less history.
 # RUST_LOG="debug"
 # WRTG_DOH_CACHE_SEC="300"                 # DoH resolve cache TTL (seconds)

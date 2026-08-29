@@ -5,6 +5,9 @@
 
 {%
 import { readfile } from 'fs';
+let wrtg_i18n = loadfile('/usr/share/ucode/luci/template/wrtg/i18n.uc')();
+let wrtg_lang = wrtg_i18n.pick_lang(readfile('/etc/wrtg/config') ?? '', ctx?.lang);
+let _ = wrtg_i18n.translator(wrtg_lang);
 
 const filepath = '/etc/wrtg/README.md';
 const workerpath = '/etc/wrtg/cf-worker.js';
@@ -30,13 +33,13 @@ let worker = readfile(workerpath) ?? '';
 </style>
 
 <div class="wrtg-worker">
-	<strong>{{ _('CF Worker — код для Cloudflare') }}</strong>
-	<p style="margin:.4em 0">{{ _('При создании Worker в Cloudflare Dashboard (Workers & Pages → Create → Worker → Edit code) замените содержимое редактора на этот файл. Затем добавьте секрет WRTG_TOKEN (Settings → Variables and Secrets) и укажите домен воркера в конфиге wrtg.') }}</p>
+	<strong>{{ _('CF Worker code for Cloudflare') }}</strong>
+	<p style="margin:.4em 0">{{ _('When creating a Worker in the Cloudflare Dashboard (Workers & Pages → Create → Worker → Edit code), replace the editor contents with this file. Then add the WRTG_TOKEN secret (Settings → Variables and Secrets) and put the worker domain into the wrtg config.') }}</p>
 	<details id="wrtg-worker-details">
-		<summary>{{ _('Показать код воркера (cf-worker.js)') }}</summary>
+		<summary>{{ _('Show the worker code (cf-worker.js)') }}</summary>
 		<pre id="wrtg-worker-code">{{ entityencode(worker) }}</pre>
 	</details>
-	<button type="button" class="btn cbi-button cbi-button-action copy-btn" id="wrtg-worker-copy">{{ _('Скопировать код воркера') }}</button><span class="copy-ok" id="wrtg-worker-copied">{{ _('Скопировано!') }}</span>
+	<button type="button" class="btn cbi-button cbi-button-action copy-btn" id="wrtg-worker-copy">{{ _('Copy the worker code') }}</button><span class="copy-ok" id="wrtg-worker-copied">{{ _('copied!') }}</span>
 </div>
 
 <script>
