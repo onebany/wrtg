@@ -1,4 +1,6 @@
 #!/bin/sh
+# Defaults here are consumed by the scripts that source this file, not by it.
+# shellcheck disable=SC2034
 # Shared helpers for wrtg OpenWrt scripts.
 
 CONFIG="${WRTG_CONFIG:-/etc/wrtg/config}"
@@ -53,55 +55,27 @@ load_config() {
 	CIDR_UPDATE_HOUR="4"
 
 	if [ -f "$CONFIG" ]; then
-		# shellcheck disable=SC1090
-		. "$CONFIG"
+		# Source a CR-stripped copy, not the file itself. A config saved from a
+		# browser textarea or a Windows editor arrives as CRLF: every blank line
+		# becomes a bare \r that the shell tries to run ("line 10: : not found")
+		# and every value keeps a trailing CR. Stripping per-variable after the
+		# fact only covers the variables someone remembered to list — which is
+		# how a CRLF config left telegram_cidr empty on a live router, with the
+		# DNAT rules in place but matching nothing, and Telegram stuck on
+		# "Connecting" because no packet ever reached the daemon.
+		_wrtg_cfg="/tmp/wrtg-config.$$"
+		if tr -d '\r' < "$CONFIG" > "$_wrtg_cfg" 2>/dev/null; then
+			# shellcheck disable=SC1090
+			. "$_wrtg_cfg"
+			rm -f "$_wrtg_cfg"
+		else
+			rm -f "$_wrtg_cfg"
+			# shellcheck disable=SC1090
+			. "$CONFIG"
+		fi
 	fi
 
-	# Windows-edited configs may carry CRLF; strip before use.
-	ROUTER_IP=$(printf '%s' "$ROUTER_IP" | tr -d '\r')
-	LAN_IF=$(printf '%s' "$LAN_IF" | tr -d '\r')
-	LISTEN=$(printf '%s' "$LISTEN" | tr -d '\r')
-	FRONT_IP=$(printf '%s' "$FRONT_IP" | tr -d '\r')
-	WRTG_FRONT_DCS=$(printf '%s' "$WRTG_FRONT_DCS" | tr -d '\r')
-	CF_WORKER_DOMAIN=$(printf '%s' "$CF_WORKER_DOMAIN" | tr -d '\r')
-	WRTG_CF_WORKER_TOKEN=$(printf '%s' "$WRTG_CF_WORKER_TOKEN" | tr -d '\r')
-	CF_PROXY_DOMAIN=$(printf '%s' "$CF_PROXY_DOMAIN" | tr -d '\r')
-	WRTG_CFPROXY_AUTO=$(printf '%s' "$WRTG_CFPROXY_AUTO" | tr -d '\r')
-	WRTG_DC_IPS=$(printf '%s' "$WRTG_DC_IPS" | tr -d '\r')
-	WRTG_DC_LEARN_FILE=$(printf '%s' "$WRTG_DC_LEARN_FILE" | tr -d '\r')
-	WRTG_DC_IPS_FILE=$(printf '%s' "$WRTG_DC_IPS_FILE" | tr -d '\r')
-	WRTG_NO_CFPROXY=$(printf '%s' "$WRTG_NO_CFPROXY" | tr -d '\r')
-	WRTG_NO_WORKER_PASSTHROUGH=$(printf '%s' "$WRTG_NO_WORKER_PASSTHROUGH" | tr -d '\r')
-	WRTG_IP_FAIL_COOLDOWN_SEC=$(printf '%s' "$WRTG_IP_FAIL_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_FRONTING_SNI=$(printf '%s' "$WRTG_FRONTING_SNI" | tr -d '\r')
-	WRTG_FRONTING_COOLDOWN_SEC=$(printf '%s' "$WRTG_FRONTING_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_DC_FAIL_COOLDOWN_SEC=$(printf '%s' "$WRTG_DC_FAIL_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_WS_FAIL_TIMEOUT_SEC=$(printf '%s' "$WRTG_WS_FAIL_TIMEOUT_SEC" | tr -d '\r')
-	WRTG_WS_FAIL_TIMEOUT_FAST_SEC=$(printf '%s' "$WRTG_WS_FAIL_TIMEOUT_FAST_SEC" | tr -d '\r')
-	WRTG_WS_POOL_SIZE=$(printf '%s' "$WRTG_WS_POOL_SIZE" | tr -d '\r')
-	WRTG_WS_POOL_TTL_SEC=$(printf '%s' "$WRTG_WS_POOL_TTL_SEC" | tr -d '\r')
-	WRTG_CF_WORKER_POOL_SIZE=$(printf '%s' "$WRTG_CF_WORKER_POOL_SIZE" | tr -d '\r')
-	WRTG_CF_WORKER_POOL_TTL_SEC=$(printf '%s' "$WRTG_CF_WORKER_POOL_TTL_SEC" | tr -d '\r')
-	WRTG_WS_BLACKLIST_TTL_SEC=$(printf '%s' "$WRTG_WS_BLACKLIST_TTL_SEC" | tr -d '\r')
-	WRTG_CFPROXY_429_COOLDOWN_SEC=$(printf '%s' "$WRTG_CFPROXY_429_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_CFPROXY_MAX_ATTEMPTS=$(printf '%s' "$WRTG_CFPROXY_MAX_ATTEMPTS" | tr -d '\r')
-	WRTG_CFPROXY_DOMAINS_URL=$(printf '%s' "$WRTG_CFPROXY_DOMAINS_URL" | tr -d '\r')
-	WRTG_CFPROXY_REFRESH_SEC=$(printf '%s' "$WRTG_CFPROXY_REFRESH_SEC" | tr -d '\r')
-	RUST_LOG=$(printf '%s' "$RUST_LOG" | tr -d '\r')
-	WRTG_LANG=$(printf '%s' "$WRTG_LANG" | tr -d '\r')
-	WRTG_CFPROXY_429_MAX_COOLDOWN_SEC=$(printf '%s' "$WRTG_CFPROXY_429_MAX_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_CF_WORKER_429_COOLDOWN_SEC=$(printf '%s' "$WRTG_CF_WORKER_429_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_CF_WORKER_429_MAX_COOLDOWN_SEC=$(printf '%s' "$WRTG_CF_WORKER_429_MAX_COOLDOWN_SEC" | tr -d '\r')
-	WRTG_CFPROXY_PARALLEL=$(printf '%s' "$WRTG_CFPROXY_PARALLEL" | tr -d '\r')
-	WRTG_DOH_CACHE_SEC=$(printf '%s' "$WRTG_DOH_CACHE_SEC" | tr -d '\r')
-	WRTG_WS_PING_SEC=$(printf '%s' "$WRTG_WS_PING_SEC" | tr -d '\r')
-	WRTG_TCP_KEEPALIVE_SEC=$(printf '%s' "$WRTG_TCP_KEEPALIVE_SEC" | tr -d '\r')
-	WRTG_MAX_CONNS=$(printf '%s' "$WRTG_MAX_CONNS" | tr -d '\r')
-	WRTG_SESSION_IDLE_SEC=$(printf '%s' "$WRTG_SESSION_IDLE_SEC" | tr -d '\r')
-	WRTG_STATS_SOCKET=$(printf '%s' "$WRTG_STATS_SOCKET" | tr -d '\r')
-	WRTG_SKIP_SRC=$(printf '%s' "$WRTG_SKIP_SRC" | tr -d '\r')
-	CIDR_URL=$(printf '%s' "$CIDR_URL" | tr -d '\r')
-	CIDR_UPDATE_HOUR=$(printf '%s' "$CIDR_UPDATE_HOUR" | tr -d '\r')
+	# CR is stripped when the file is sourced, so values arrive clean.
 
 	if [ -z "$LAN_IF" ]; then
 		LAN_IF="$(uci -q get network.lan.device 2>/dev/null || true)"

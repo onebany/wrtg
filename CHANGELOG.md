@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 - 2026-08-29
+
+### Fixed
+- **A config saved from the browser could stop the proxy dead.** Textareas post CRLF line endings, and the settings page wrote them through untouched. The daemon survived it, but `update-cidr.sh` did not: sourcing the file made every blank line a bare `\r` the shell tried to run, and the Telegram CIDR set came out empty. The nftables DNAT rules were all present and matched nothing, so no packet ever reached the daemon — `wrtg --stats` showed a healthy service with `accepted 0` while Telegram sat on "Connecting" forever.
+
+  Two changes, either of which would have prevented it. `lib.sh` now sources a CR-stripped copy of the config instead of the file, so nothing downstream can trip over line endings; the per-variable `tr -d` calls it used to rely on are gone, since they only ever covered the variables someone remembered to add — `WRTG_LANG`, added a day earlier, was not among them. And the settings page normalises line endings before writing, for both the forms and the raw editor.
+
 ## 1.1.0 - 2026-08-29
 
 ### Added

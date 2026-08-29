@@ -52,6 +52,15 @@ function run_probe(which) {
 	return length(keep) ? join('\n', keep) : out;
 }
 
+// A browser posts textarea content with CRLF line endings (HTML spec), and a
+// config written that way makes every blank line a bare \r the shell tries to
+// run and leaves a trailing CR on every value. Seen live: it emptied the
+// telegram_cidr set, so the DNAT rules matched nothing and Telegram sat on
+// "Connecting" with the daemon idle and healthy.
+function lf(text) {
+	return replace(replace(text ?? '', /\r\n/g, '\n'), /\r/g, '\n');
+}
+
 function cfg_escape(val) {
 	val = replace(val, /[\r\n]/g, '');
 	val = replace(val, /\\/g, '\\\\');
@@ -103,7 +112,7 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	let form = http.formvalue('_form');
 	let saved = false;
 	if (form == 'quick') {
-		let text = readfile(cfg_path) ?? '';
+		let text = lf(readfile(cfg_path) ?? '');
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'WRTG_DC_IPS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN',
 		               'CF_PROXY_DOMAIN', 'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS',
 		               'WRTG_CFPROXY_DOMAINS_URL', 'WRTG_CFPROXY_REFRESH_SEC',
@@ -139,7 +148,7 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 		msg = _('CF Worker probe finished.');
 		saved = false;
 	} else if (form == 'raw') {
-		let data = http.formvalue('_cfg');
+		let data = lf(http.formvalue('_cfg'));
 		if (data != null) {
 			let tmp = '/tmp/wrtg-config.validate';
 			writefile(tmp, data);
