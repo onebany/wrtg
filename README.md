@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 1.2.0 · **Last updated:** 2026-08-29
+**Version:** 1.2.0 · **Last updated:** 2026-09-01
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
