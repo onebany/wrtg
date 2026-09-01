@@ -75,8 +75,14 @@ let listen = cfg_val(cfg, 'LISTEN') || '0.0.0.0:8443';
 let nft = sh("nft list table inet tg_tproxy 2>/dev/null | grep -c 'dnat ip to'");
 let dnat_ok = int(nft) > 0;
 
-// CIDR count
-let cidr_n = sh("grep -cE '^[0-9]' /var/lib/wrtg/cidrs.txt 2>/dev/null");
+// CIDR count, from the live nft set rather than the cache file. The file can
+// hold its 10 networks while the set is empty — that is what a CRLF config did
+// once — and then the DNAT rules match nothing while every other indicator
+// here stays green.
+let cidr_n = int(sh("nft list set inet tg_tproxy telegram_cidr 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+' | wc -l"));
+
+// Hosts excluded from the intercept (WRTG_SKIP_SRC)
+let skip_src = filter(split(cfg_val(cfg, 'WRTG_SKIP_SRC'), /[ \t,]+/), function(s) { return length(s) > 0; });
 
 // Per-DC health from recent logs: last outcome per DC.
 let loglines = sh("logread -e wrtg 2>/dev/null | tail -n 400");
@@ -191,7 +197,8 @@ function badge(ok, yes, no) {
 		<div class="wrtg-kv"><b>FRONT_IP</b> {{ front_ip }}</div>
 		<div class="wrtg-kv"><b>WRTG_FRONT_DCS</b> {{ front_dcs }}</div>
 		<div class="wrtg-kv"><b>DNAT</b> {{ badge(dnat_ok, _('loaded'), _('missing')) }}</div>
-		<div class="wrtg-kv"><b>{{ _('CIDR nets') }}</b> {{ length(cidr_n) ? cidr_n : '0' }}</div>
+		<div class="wrtg-kv"><b>{{ _('CIDR nets') }}</b> {{ cidr_n > 0 ? cidr_n : badge(false, '', _('0 — nothing is intercepted')) }}</div>
+		<div class="wrtg-kv"><b>{{ _('Excluded hosts') }}</b> {{ length(skip_src) == 0 ? '—' : (length(skip_src) <= 3 ? join(', ', skip_src) : length(skip_src)) }}</div>
 	</div>
 
 	<div class="wrtg-card">

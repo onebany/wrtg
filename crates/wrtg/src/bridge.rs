@@ -1144,7 +1144,15 @@ pub async fn blind_relay(
     }
 
     let Some(mut remote) = remote else {
-        log::warn!("[{label}] passthrough failed host={host:?} (tried {tried:?})");
+        if host.is_empty() {
+            // No SNI to act on: typically a DPI-bypass client's split or decoy
+            // ClientHello, arriving by the thousand per hour. One WARN each
+            // rotates real diagnostics out of the router's syslog ring; the
+            // fix for that client is WRTG_SKIP_SRC, not a log line.
+            log::debug!("[{label}] passthrough failed host=\"\" (tried {tried:?})");
+        } else {
+            log::warn!("[{label}] passthrough failed host={host:?} (tried {tried:?})");
+        }
         return;
     };
 

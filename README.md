@@ -7,7 +7,7 @@
 [![Build](https://github.com/onebany/wrtg/actions/workflows/build.yml/badge.svg)](https://github.com/onebany/wrtg/actions/workflows/build.yml)
 [![Platform](https://img.shields.io/badge/platform-OpenWrt-00B5E2)](https://openwrt.org)
 
-**Version:** 1.1.1 · **Last updated:** 2026-08-29
+**Version:** 1.2.0 · **Last updated:** 2026-08-29
 
 [Релизы](https://github.com/onebany/wrtg/releases) · [CHANGELOG.md](CHANGELOG.md) · [Исходник CF Worker](openwrt/cf-worker.js) · [Issues](https://github.com/onebany/wrtg/issues)
 
@@ -125,7 +125,7 @@ wrtg --check
 
 ## Настройка
 
-Файл `/etc/wrtg/config`. Front/домены/DC-learn применяются вживую: **`/etc/init.d/wrtg reload`** (SIGHUP, без разрыва сессий). Полный **`restart`** нужен только для `LISTEN`/nftables.
+Файл `/etc/wrtg/config`. Front/домены/DC-learn и область перехвата (`WRTG_SKIP_SRC`, `LAN_IF`) применяются вживую: **`/etc/init.d/wrtg reload`** — SIGHUP демону и атомарная пересборка nft-таблицы, без разрыва сессий. Полный **`restart`** нужен только для `LISTEN` и размеров пулов.
 Только CIDR/nft: `/etc/wrtg/update-cidr.sh`.
 
 Проще всего править в LuCI: **Services → wrtg → Settings**. Страница разбита на секции — датацентры, CF Proxy, CF Worker, логи и производительность — и внизу остаётся редактор файла целиком.
@@ -219,7 +219,7 @@ DC1/DC3/DC5 часто отвечают HTTP 302 на direct WS — для ни�
 | `WRTG_TCP_KEEPALIVE_SEC` | TCP keepalive | `30` |
 | `WRTG_MAX_CONNS` | Макс. одновременных соединений (backpressure-семафор; 0/unset → 1024) | `1024` |
 | `WRTG_STATS_SOCKET` | Unix-сокет снимка `wrtg --stats` | `/var/run/wrtg.sock` |
-| `WRTG_SKIP_SRC` | LAN-хосты (IP/CIDR через пробел), не перехватываемые DNAT | пусто |
+| `WRTG_SKIP_SRC` | LAN-хосты (IP/CIDR через пробел), не перехватываемые DNAT; в LuCI — **Settings → Перехват** | пусто |
 
 CLI: `--listen ADDR`, `--front-ip IP`, `--check`, `--stats`, `--version`.
 
@@ -387,7 +387,7 @@ logread -e wrtg | grep -i 'CF proxy'
 | HTTP 302 на WS | Настройте `CF_WORKER_DOMAIN` |
 | Media/CDN не грузятся | Worker passthrough: задан ли `CF_WORKER_DOMAIN` и не выставлен ли `WRTG_NO_WORKER_PASSTHROUGH` |
 | Медленный fallback | Задайте `WRTG_CFPROXY_AUTO="0"` и используйте свой Worker |
-| `passthrough_no_data` растёт в `--stats` | Клиент с собственным обходом DPI за wrtg — исключите его через `WRTG_SKIP_SRC` |
+| `blind_relay` ≫ `cf_proxy` в `--stats`, растёт `passthrough_no_data`, в логе поток `passthrough failed host=""` | Клиент с собственным обходом DPI (zapret/byedpi) за wrtg: его приманки доходят до Telegram как настоящие данные и остаются без ответа. Исключите его: **Settings → Перехват** или `WRTG_SKIP_SRC` |
 | `curl: (28)` при установке | DPI провайдера дропает GitHub — [офлайн-установка](#офлайн-установка-github-недоступен-с-роутера) |
 
 ---

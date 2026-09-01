@@ -37,6 +37,26 @@ function dc_ips_to_lines(v) {
 	return join('\n', split(v ?? '', ','));
 }
 
+function skip_src_to_lines(v) {
+	return join('\n', filter(split(v ?? '', /[ \t,]+/), function(s) { return length(s) > 0; }));
+}
+
+// One IPv4 address or CIDR per line -> the space-separated form setup-nft.sh
+// reads. Same check as setup-nft.sh: octets 0-255, prefix 0-32. Returns the
+// first offending line so it can be shown instead of silently dropped at boot.
+function skip_src_from_lines(v) {
+	let octet = '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])';
+	let re = regexp('^(' + octet + '\\.){3}' + octet + '(/([0-9]|[12][0-9]|3[0-2]))?$');
+	let out = [];
+	for (let line in split(v ?? '', /[\r\n]+/)) {
+		line = trim(line);
+		if (!length(line)) continue;
+		if (!match(line, re)) return { value: null, bad: line };
+		push(out, line);
+	}
+	return { value: join(' ', out), bad: null };
+}
+
 // One rung of `wrtg --check` rather than the whole sweep: the Test buttons sit
 // next to a single setting, so showing every probe would bury the answer.
 function run_probe(which) {
@@ -112,17 +132,29 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 	let form = http.formvalue('_form');
 	let saved = false;
 	if (form == 'quick') {
+		// Exclusions go straight into nft rules, so a bad line is refused here
+		// rather than dropped at boot with a message nobody sees.
+		let skip = skip_src_from_lines(http.formvalue('WRTG_SKIP_SRC'));
+		if (skip.bad != null) {
+			msg = _('Not saved: not an IPv4 address or CIDR: ') + skip.bad;
+			msg_ok = false;
+			form = null;
+		}
+	}
+	if (form == 'quick') {
 		let text = lf(readfile(cfg_path) ?? '');
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'WRTG_DC_IPS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN',
 		               'CF_PROXY_DOMAIN', 'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS',
 		               'WRTG_CFPROXY_DOMAINS_URL', 'WRTG_CFPROXY_REFRESH_SEC',
-		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS', 'WRTG_LANG']) {
+		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS', 'WRTG_LANG', 'WRTG_SKIP_SRC']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
 				v = sanitize_domains(v);
 			if (k == 'WRTG_DC_IPS')
 				v = dc_ips_from_lines(v);
+			if (k == 'WRTG_SKIP_SRC')
+				v = skip_src_from_lines(v).value;
 			text = set_key(text, k, trim(v));
 		}
 		// Checkboxes post nothing when cleared, so a marker field says "this
@@ -133,7 +165,7 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 			text = set_key(text, 'RUST_LOG', http.formvalue('cb_verbose') == '1' ? 'debug' : '');
 		writefile(cfg_path, text);
 		system('chmod 600 /etc/wrtg/config');
-		msg = _('Saved. Restart wrtg to apply pools/scope changes.');
+		msg = _('Saved. Reload applies everything except LISTEN and pool sizes; those need a restart.');
 		saved = true;
 	} else if (form == 'check') {
 		check_out = run_check_cmd();
@@ -261,6 +293,20 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 			<input type="text" name="WRTG_FRONT_DCS" value="{{ cfg_val(cfg, 'WRTG_FRONT_DCS') }}" placeholder="2,4" style="width:16em" />
 			<small style="opacity:.7">{{ _('2,4 (default) · all · none · list') }}</small>
 		</div>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_reload" value="1">{{ _('Save & Reload') }}</button>
+		</div>
+	</form>
+</div>
+
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Intercept') }}</h3>
+	<p class="hint">{{ _('LAN hosts wrtg leaves alone, one IPv4 address or CIDR per line. Use it for a client that runs its own DPI bypass (zapret, byedpi and the like): its decoy packets are meant to die in transit, but wrtg terminates TCP one hop away, so they arrive as real data, get relayed to Telegram and never get an answer — the client then retries forever. An excluded host reaches Telegram directly and keeps its own bypass. Applied on reload.') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<textarea name="WRTG_SKIP_SRC" rows="3" placeholder="192.168.1.50&#10;192.168.1.0/28" style="width:100%;max-width:36em;font-family:monospace;font-size:13px">{{ skip_src_to_lines(cfg_val(cfg, 'WRTG_SKIP_SRC')) }}</textarea>
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
 			<button class="cbi-button cbi-button-apply" type="submit" name="_reload" value="1">{{ _('Save & Reload') }}</button>

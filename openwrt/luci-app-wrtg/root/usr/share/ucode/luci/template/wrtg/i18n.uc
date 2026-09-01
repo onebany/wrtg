@@ -82,7 +82,7 @@ const RU = {
 	"Save & Reload": "Сохранить и перечитать",
 	"Save & Restart": "Сохранить и перезапустить",
 	"Save raw": "Сохранить конфиг",
-	"Saved. Restart wrtg to apply pools/scope changes.": "Сохранено. Перезапустите wrtg, чтобы применить изменения пулов и области.",
+	"Saved. Reload applies everything except LISTEN and pool sizes; those need a restart.": "Сохранено. Reload применяет всё, кроме LISTEN и размеров пулов — для них нужен restart.",
 	"Secret": "Секрет",
 	"Service": "Служба",
 	"Service restarted.": "Служба перезапущена.",
@@ -146,6 +146,11 @@ const RU = {
 	"wrtg auto-learns which DC each Telegram IP belongs to. Add a manual override, or clear the learned map if it picked up a bad mapping. Both reload live.": "wrtg сам запоминает, какому DC принадлежит каждый IP Telegram. Можно добавить своё правило или очистить выученное, если попалось неверное. И то и другое применяется на лету.",
 	"wrtg — Telegram proxy": "wrtg — прокси Telegram",
 	"— check first": "— сначала проверьте",
+	"0 — nothing is intercepted": "0 — перехват не работает",
+	"Excluded hosts": "Исключённые хосты",
+	"Intercept": "Перехват",
+	"LAN hosts wrtg leaves alone, one IPv4 address or CIDR per line. Use it for a client that runs its own DPI bypass (zapret, byedpi and the like): its decoy packets are meant to die in transit, but wrtg terminates TCP one hop away, so they arrive as real data, get relayed to Telegram and never get an answer — the client then retries forever. An excluded host reaches Telegram directly and keeps its own bypass. Applied on reload.": "Хосты LAN, которые wrtg не перехватывает — по одному IPv4-адресу или CIDR на строку. Нужно для клиента со своим обходом DPI (zapret, byedpi и подобные): его пакеты-приманки должны погибнуть в пути, но wrtg завершает TCP на первом же узле, поэтому они доходят как настоящие данные, уходят в Telegram и остаются без ответа — клиент повторяет попытки бесконечно. Исключённый хост идёт к Telegram напрямую, и его обход работает. Применяется при reload.",
+	"Not saved: not an IPv4 address or CIDR: ": "Не сохранено: это не IPv4-адрес и не CIDR: ",
 };
 
 // 'auto' follows LuCI's own language, anything else wins. Read straight from

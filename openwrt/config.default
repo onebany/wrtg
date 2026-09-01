@@ -160,10 +160,12 @@ FRONT_IP="149.154.167.220"
 # ClientHellos meant to die in transit, but wrtg terminates TCP one hop away, so
 # the decoys arrive as real payload, get relayed to Telegram, and are never
 # answered — the client then retries every few seconds forever. Watch for it as
-# a climbing `passthrough_no_data` in `wrtg --stats`. Excluded hosts reach
-# Telegram directly and keep their own bypass. Applied by setup-nft.sh, so a
-# change needs `/etc/init.d/wrtg restart` (not just reload).
-# WRTG_SKIP_SRC="192.168.20.254"
+# `blind_relay` far above `cf_proxy` in `wrtg --stats`, a climbing
+# `passthrough_no_data`, or `passthrough failed host=""` in the log. Excluded
+# hosts reach Telegram directly and keep their own bypass. Applied on
+# `/etc/init.d/wrtg reload` (the nft table is rebuilt without dropping
+# sessions). Editable in LuCI: Settings → Intercept.
+# WRTG_SKIP_SRC="192.168.1.50 192.168.1.0/28"
 
 # Alternative front IP env names. Only useful when running the binary manually
 # without the init script: init always passes `-front-ip "$FRONT_IP"`, and the

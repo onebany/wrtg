@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-09-01
+
+### Added
+- **Exclude LAN hosts from the intercept, from LuCI.** New *Settings → Intercept* section edits `WRTG_SKIP_SRC`: one IPv4 address or CIDR per line. A bad line is refused on save with the offending value shown, instead of being dropped at boot by `setup-nft.sh` with a message on stderr nobody reads. The typical tenant is a client running its own DPI bypass (zapret, byedpi): its decoy ClientHellos are meant to die in transit, but wrtg terminates TCP one hop away and relays them to Telegram, which never answers — on one router such a host made 87% of all connections and 1300 log lines an hour.
+- **Status shows what the intercept actually covers.** *CIDR nets* now counts the live nft set rather than the cache file — the file kept its 10 networks while the set was empty in 1.1.0's CRLF failure, so the page would have said 10 with nothing intercepted. Zero is a red badge. A new *Excluded hosts* line lists `WRTG_SKIP_SRC`.
+
+### Changed
+- **`reload` rebuilds the nft table.** `WRTG_SKIP_SRC` and `LAN_IF` edits no longer need a `restart` that drops every session: `setup-nft.sh` swaps the table in one validated atomic batch, and conntrack carries existing DNAT sessions across. Only `LISTEN` and pool sizes still need `restart`. A failed rebuild keeps the old table and does not block the SIGHUP.
+- `passthrough failed host=""` (no SNI to act on) is logged at debug, not warn. Every such connection produced a WARN, and a DPI-bypass client behind the router produced thousands, rotating real diagnostics out of the syslog ring. The fix for that client is the exclusion above; a log line was never going to help.
+
 ## 1.1.1 - 2026-08-29
 
 ### Fixed
