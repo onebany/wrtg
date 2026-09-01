@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1 - 2026-09-01
+
+### Fixed
+- **`reload` emptied the CF Proxy pool.** On SIGHUP the daemon re-applied the config file, and the pool became whatever `CF_PROXY_DOMAIN` said — nothing, on a stock install that relies on `WRTG_CFPROXY_AUTO`. At startup the same step is harmless because the built-in list is seeded right after; on reload nothing seeded, so the 20 fetched domains were replaced by zero until the next GitHub refresh, up to an hour later. On a router where the ISP blocks every Telegram IP, that is every MTProto connection falling through to a TCP fallback that cannot succeed: Telegram on "Connecting", `all_paths_failed` at 29% of accepted. The bug is older than 1.2.0, but 1.2.0's *Save & Reload* for exclusions made it easy to hit. Reload now keeps the live auto pool when the file names no proxy of its own, and seeds the built-in list if the pool happens to be empty.
+
 ## 1.2.0 - 2026-09-01
 
 ### Added

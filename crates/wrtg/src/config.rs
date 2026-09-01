@@ -3,8 +3,12 @@
 use std::collections::HashMap;
 use std::env;
 
-use crate::cf_balancer::{parse_domain_list, set_proxy_domains, set_worker_domains};
-use crate::cf_proxy_domains::normalize_domain_pool;
+use crate::cf_balancer::{
+    cf_fallback_disabled, parse_domain_list, proxy_domains, set_proxy_domains, set_worker_domains,
+};
+use crate::cf_proxy_domains::{
+    cfproxy_auto_decision, default_cfproxy_domains, normalize_domain_pool,
+};
 use crate::mtproto::{set_dc_front_ips, set_front_dcs, set_front_ip};
 
 #[derive(Debug, Clone)]
@@ -214,6 +218,29 @@ fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
     Some((key, val))
 }
 
+/// The CF Proxy pool a reload should leave in place.
+///
+/// `apply_config` installs whatever the file names, which is right at startup:
+/// the auto pool is seeded right after. On SIGHUP nothing seeds, so a router
+/// with `WRTG_CFPROXY_AUTO=1` and no `CF_PROXY_DOMAIN` — the stock setup — had
+/// its 20 fetched domains replaced by the file's zero, and every MTProto
+/// connection fell straight through to a TCP fallback the ISP blocks. Until the
+/// next GitHub refresh, up to an hour later, Telegram sat on "Connecting".
+fn proxy_pool_after_reload(
+    file_domains: &[String],
+    live_pool: Vec<String>,
+    auto: bool,
+) -> Vec<String> {
+    if !file_domains.is_empty() || !auto {
+        return file_domains.to_vec();
+    }
+    if live_pool.is_empty() {
+        default_cfproxy_domains()
+    } else {
+        live_pool
+    }
+}
+
 /// Re-read the config file and re-apply front/domains + reload the DC-learn map,
 /// without touching the listener. Triggered by SIGHUP (`/etc/init.d/wrtg reload`).
 pub fn reload_from_file() {
@@ -221,20 +248,64 @@ pub fn reload_from_file() {
     let map = import_config_file(&path);
     let keys = map.len();
     let cfg = load_from_map(&map);
+    let live_pool = proxy_domains();
     apply_config(&cfg);
+    let auto = !cf_fallback_disabled()
+        && cfproxy_auto_decision(map.get("WRTG_CFPROXY_AUTO").map(String::as_str));
+    set_proxy_domains(proxy_pool_after_reload(
+        &cfg.cf_proxy_domains,
+        live_pool,
+        auto,
+    ));
     crate::dc_learn::load();
     log::info!(
         "reloaded config from {path} ({keys} keys): front-ip={} front-dcs={:?} cf-workers={} cf-proxies={}",
         cfg.front_ip,
         cfg.front_dcs,
         cfg.cf_worker_domains.len(),
-        cfg.cf_proxy_domains.len()
+        proxy_domains().len()
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn reload_keeps_auto_pool_when_file_names_no_proxy() {
+        // The live case: WRTG_CFPROXY_AUTO=1, no CF_PROXY_DOMAIN. A SIGHUP must
+        // not replace the 20 fetched domains with the file's zero.
+        let live = v(&["a.example", "b.example"]);
+        assert_eq!(proxy_pool_after_reload(&[], live.clone(), true), live);
+    }
+
+    #[test]
+    fn reload_seeds_defaults_when_auto_pool_is_empty() {
+        // Auto is on but nothing was ever installed (e.g. auto was off at
+        // start and switched on in the file): fall back to the built-in list
+        // rather than leaving the pool empty until the next refresh.
+        let out = proxy_pool_after_reload(&[], Vec::new(), true);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn reload_uses_file_domains_when_given() {
+        let file = v(&["mine.example"]);
+        let live = v(&["a.example"]);
+        assert_eq!(proxy_pool_after_reload(&file, live, true), file);
+        let file = v(&["mine.example"]);
+        assert_eq!(proxy_pool_after_reload(&file, Vec::new(), false), file);
+    }
+
+    #[test]
+    fn reload_clears_pool_when_auto_off_and_file_empty() {
+        let live = v(&["a.example"]);
+        assert!(proxy_pool_after_reload(&[], live, false).is_empty());
+    }
 
     #[test]
     fn parse_front_dcs_cases() {
