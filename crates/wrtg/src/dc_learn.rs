@@ -104,28 +104,26 @@ pub fn observed_slots() -> Vec<(i32, bool)> {
 
 /// Record `ip → (dc, is_media)` observed from a handshake that embedded the DC.
 /// No-op when the IP is already resolvable from the hardcoded tables or was
-/// already learned with the same DC — so the persist file only grows on a
-/// genuinely new IP (flash-friendly).
+/// already learned: the first observation stands until an operator overrides
+/// it in the admin file. An IP that serves several DCs — the shared front
+/// 149.154.167.220 answers for DC2 and DC4, media or not — used to flip on
+/// every disagreeing client: 712 of the 745 lines in one router's learned
+/// file were that one address, each a flash write, and the guess handed to
+/// clients that omit the DC changed with whoever had connected last.
 pub fn learn(ip: &str, dc: i32, is_media: bool) {
     if ip.is_empty() || !valid_dc(dc) || dc_from_hardcoded(ip).is_some() {
         return;
     }
-    {
-        // Fast path: already known with the same DC — nothing to do.
-        if let Some(&(d, media)) = LEARNED.read().unwrap().get(ip) {
-            if d == dc && media == is_media {
-                return;
-            }
-        }
+    if LEARNED.read().unwrap().contains_key(ip) {
+        return;
     }
     let is_new = {
         let mut map = LEARNED.write().unwrap();
-        match map.get(ip) {
-            Some(&(d, media)) if d == dc && media == is_media => false,
-            _ => {
-                map.insert(ip.to_string(), (dc, is_media));
-                true
-            }
+        if map.contains_key(ip) {
+            false
+        } else {
+            map.insert(ip.to_string(), (dc, is_media));
+            true
         }
     };
     if is_new {
@@ -170,6 +168,17 @@ mod tests {
     use std::sync::Mutex;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn first_observation_wins() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        std::env::set_var("WRTG_DC_LEARN_FILE", "/dev/null");
+        let ip = "203.0.113.220";
+        learn(ip, 2, false);
+        learn(ip, 4, true);
+        learn(ip, 2, true);
+        assert_eq!(lookup(ip), Some((2, false)));
+    }
 
     #[test]
     fn parse_variants() {

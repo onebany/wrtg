@@ -30,6 +30,7 @@ pub enum Stat {
     PassthroughNoData,
     CfProxyMedia,
     MediaHttpRejected,
+    CfProxyDialFailed,
 }
 
 /// Display names, index-aligned with [`Stat`].
@@ -49,10 +50,11 @@ const NAMES: [&str; Stat::COUNT] = [
     "passthrough_no_data",
     "cf_proxy_media",
     "media_http_rejected",
+    "cf_proxy_dial_failed",
 ];
 
 impl Stat {
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 16;
 
     pub fn name(self) -> &'static str {
         NAMES[self as usize]
@@ -158,6 +160,14 @@ pub async fn snapshot() -> String {
             let tag = if media { "m" } else { "" };
             out.push_str(&format!("  DC{dc}{tag} {depth}\n"));
         }
+    }
+    out.push_str("cf proxy\n");
+    let sticky = crate::cf_balancer::proxy_sticky_domains();
+    if sticky.is_empty() {
+        out.push_str("  (no sticky yet)\n");
+    }
+    for (dc, domain) in sticky {
+        out.push_str(&format!("  DC{dc} sticky {domain}\n"));
     }
     crate::heap::render(&mut out);
     out
@@ -331,6 +341,8 @@ mod tests {
         }
         assert!(out.contains("ws pool"));
         assert!(out.contains("cf worker pool"));
+        assert!(out.contains("cf proxy"));
+        assert!(out.contains("heap live"));
     }
 
     #[test]

@@ -84,6 +84,22 @@ let cidr_n = int(sh("nft list set inet tg_tproxy telegram_cidr 2>/dev/null | gre
 // Hosts excluded from the intercept (WRTG_SKIP_SRC)
 let skip_src = filter(split(cfg_val(cfg, 'WRTG_SKIP_SRC'), /[ \t,]+/), function(s) { return length(s) > 0; });
 
+// CF Proxy: mode from the config, health from the daemon's own snapshot.
+// Without this the only way to see that a DC was pinned on three flaky
+// domains for an hour was to count WARN lines in syslog.
+let cf_proxy_domain = cfg_val(cfg, 'CF_PROXY_DOMAIN');
+let cf_proxy_mode = length(cf_proxy_domain) ? 'own' : (cfg_val(cfg, 'WRTG_CFPROXY_AUTO') == '0' ? 'off' : 'pool');
+let stats_raw = sh('/usr/sbin/wrtg --stats 2>/dev/null');
+let cfp_ok = 0, cfp_failed = 0, cfp_sticky = [];
+for (let line in split(stats_raw, /\n/)) {
+	let m = match(line, /^  cf_proxy ([0-9]+)$/);
+	if (m) { cfp_ok = int(m[1]); continue; }
+	m = match(line, /^  cf_proxy_dial_failed ([0-9]+)$/);
+	if (m) { cfp_failed = int(m[1]); continue; }
+	m = match(line, /^  DC([0-9]+) sticky ([^ ]+)$/);
+	if (m) push(cfp_sticky, 'DC' + m[1] + ' → ' + m[2]);
+}
+
 // Per-DC health from recent logs: last outcome per DC.
 let loglines = sh("logread -e wrtg 2>/dev/null | tail -n 400");
 let dc_state = {};
@@ -209,6 +225,15 @@ function badge(ok, yes, no) {
 		{% } else { %}
 			<div class="wrtg-kv y">{{ _('DC1/3/5 need a Worker — see Documentation → CF Worker Setup') }}</div>
 		{% } %}
+	</div>
+
+	<div class="wrtg-card">
+		<h4>CF Proxy</h4>
+		<p class="big">{{ cf_proxy_mode == 'off' ? badge(false, '', _('off')) : badge(true, cf_proxy_mode == 'own' ? _('own domain') : _('shared pool'), '') }}</p>
+		{% if (cf_proxy_mode == 'own') { %}<div class="wrtg-kv" style="word-break:break-all">{{ cf_proxy_domain }}</div>{% } %}
+		<div class="wrtg-kv"><b>{{ _('sessions') }}</b> <span class="g">{{ cfp_ok }}</span> · <b>{{ _('failed dials') }}</b> <span class="{{ cfp_failed > cfp_ok ? 'r' : 'y' }}">{{ cfp_failed }}</span></div>
+		<div class="wrtg-kv"><b>{{ _('sticky per DC') }}</b> {{ length(cfp_sticky) ? join(', ', cfp_sticky) : _('no sticky yet') }}</div>
+		<p style="font-size:12px;opacity:.6;margin-top:8px">{{ _('The daemon keeps the last domain that worked for each DC and moves past a window that failed.') }}</p>
 	</div>
 
 	<div class="wrtg-card">

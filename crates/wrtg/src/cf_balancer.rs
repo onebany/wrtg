@@ -22,10 +22,12 @@ pub fn set_worker_domains(domains: Vec<String>) {
 }
 
 pub fn set_proxy_domains(domains: Vec<String>) {
+    // Only the list changes. The per-DC cursor and the sticky domain survive
+    // a refresh: resetting them sent the first DC to connect after every
+    // hourly refresh back to index 0 — the same three flaky domains at the
+    // head of the shared list — for the rest of the hour. A sticky whose
+    // domain left the pool is ignored by `proxy_domains_for_dc`.
     *PROXY_DOMAINS.lock().unwrap() = domains;
-    PROXY_RR.store(0, Ordering::Relaxed);
-    DC_PROXY_IDX.lock().unwrap().clear();
-    DC_PROXY_STICKY.lock().unwrap().clear();
 }
 
 pub fn worker_domains() -> Vec<String> {
@@ -137,6 +139,39 @@ pub fn update_proxy_domain_for_dc(dc: i32, domain: &str) {
     map.insert(dc, domain);
 }
 
+/// The CF stage failed for `dc` with every candidate it tried: forget the
+/// sticky domain and move the DC's cursor past the failed window, so the next
+/// session starts on domains this DC has not just watched fail. Nothing is
+/// parked — health in the shared pool changes on a minutes scale, so the
+/// cursor simply comes round to these domains again later.
+/// ponytail: per-session advance; concurrent failures overshoot the window,
+/// harmless modulo pool size.
+pub fn advance_proxy_domains_for_dc(dc: i32, by: usize) {
+    let sticky = DC_PROXY_STICKY.lock().unwrap().remove(&dc);
+    let domains = PROXY_DOMAINS.lock().unwrap().clone();
+    let len = domains.len().max(1);
+    let mut map = DC_PROXY_IDX.lock().unwrap();
+    let idx = map
+        .entry(dc)
+        .or_insert_with(|| PROXY_RR.fetch_add(1, Ordering::Relaxed) % len);
+    *idx = (*idx + by) % len;
+    if domains.get(*idx) == sticky.as_ref() {
+        *idx = (*idx + 1) % len;
+    }
+}
+
+/// Sticky CF proxy domain per DC, sorted by DC, for `--stats`.
+pub fn proxy_sticky_domains() -> Vec<(i32, String)> {
+    let mut v: Vec<(i32, String)> = DC_PROXY_STICKY
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(dc, d)| (*dc, d.clone()))
+        .collect();
+    v.sort();
+    v
+}
+
 pub fn parse_domain_list(raw: &str) -> Vec<String> {
     raw.split([',', ';', ' '])
         .map(|s| s.trim().trim_matches('"').trim_matches('\r'))
@@ -204,13 +239,53 @@ mod tests {
         assert_eq!(c.len(), 2);
     }
 
+    // The proxy pool is process-global; these tests replace it, so they
+    // must not interleave.
+    static PROXY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn sticky_proxy_domain_first() {
+        let _guard = PROXY_TEST_LOCK.lock().unwrap();
         set_proxy_domains(vec!["a.co.uk".into(), "b.co.uk".into()]);
         update_proxy_domain_for_dc(1, "b.co.uk");
         let domains = proxy_domains_for_dc(1);
         assert_eq!(domains.first().map(String::as_str), Some("b.co.uk"));
         assert_eq!(domains.len(), 2);
+    }
+
+    #[test]
+    fn advance_moves_the_window_and_drops_sticky() {
+        let _guard = PROXY_TEST_LOCK.lock().unwrap();
+        set_proxy_domains(
+            ["a", "b", "c", "d", "e", "f"]
+                .iter()
+                .map(|d| format!("{d}.co.uk"))
+                .collect(),
+        );
+        update_proxy_domain_for_dc(41, "f.co.uk");
+        let before = proxy_domains_for_dc(41);
+        assert_eq!(before[0], "f.co.uk");
+        // A three-domain window failed: the sticky and the two at the cursor.
+        advance_proxy_domains_for_dc(41, 3);
+        let after = proxy_domains_for_dc(41);
+        assert_eq!(after.len(), 6);
+        assert_ne!(after[0], "f.co.uk", "a failed sticky must lose its place");
+        assert_ne!(after[0], before[1], "the cursor must have moved");
+    }
+
+    #[test]
+    fn refresh_keeps_sticky_when_its_domain_survives() {
+        let _guard = PROXY_TEST_LOCK.lock().unwrap();
+        set_proxy_domains(vec!["a.co.uk".into(), "b.co.uk".into()]);
+        update_proxy_domain_for_dc(42, "b.co.uk");
+        set_proxy_domains(vec!["b.co.uk".into(), "c.co.uk".into()]);
+        assert_eq!(proxy_domains_for_dc(42)[0], "b.co.uk");
+        assert!(proxy_sticky_domains()
+            .iter()
+            .any(|(dc, d)| *dc == 42 && d == "b.co.uk"));
+        // Gone from the pool: ignored, not an error.
+        set_proxy_domains(vec!["c.co.uk".into()]);
+        assert_eq!(proxy_domains_for_dc(42), vec!["c.co.uk".to_string()]);
     }
 
     #[test]

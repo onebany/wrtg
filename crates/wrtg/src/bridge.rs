@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::cf_balancer::{
-    cf_fallback_disabled, proxy_domains_for_dc, update_proxy_domain_for_dc, worker_domains,
-    worker_domains_for_dc, worker_passthrough_disabled,
+    advance_proxy_domains_for_dc, cf_fallback_disabled, proxy_domains_for_dc,
+    update_proxy_domain_for_dc, worker_domains, worker_domains_for_dc, worker_passthrough_disabled,
 };
 use crate::cf_proxy::try_cf_proxy_domain;
 use crate::cf_worker_cooldown::{clear_worker_429, mark_worker_429_with_peers, usable_workers};
@@ -31,6 +31,7 @@ use crate::mtproto::{
 use crate::sockopt::{tune_tcp, RELAY_BUF_SIZE};
 use crate::splitter::MsgSplitter;
 use crate::tls_sni::{passthrough_host, passthrough_targets};
+use crate::ttl_map::TtlMap;
 use crate::ws::{
     connect_cf_worker_tcp, connect_cf_worker_ws, connect_ws_with_headers, is_ws_redirect_err,
     ws_ping_frame, RawWebSocket,
@@ -40,7 +41,12 @@ use crate::ws_pool::{acquire, schedule_refill};
 
 const WS_CHANNEL_CAP: usize = 32;
 const WS_SEND_BATCH_MAX: usize = 32;
-const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// A healthy CF dial — TLS plus the WebSocket upgrade — takes 0.15–0.25 s from
+/// the routers here. What ran into the old 8 s was a Worker waiting on a
+/// Telegram upstream that would not answer; a session then spent 8 s on the
+/// primary and 8 s more on the race before falling through. 4 s is still
+/// fifteen times the healthy figure.
+const CF_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// CF proxy base domains tried per session: the first sequentially, the rest as
 /// a parallel race. Raise it when the shared pool is patchy — its working share
 /// has been measured between 6 and 16 of 20 domains depending on the DC, so
@@ -65,6 +71,9 @@ const DEFAULT_SESSION_IDLE_SEC: u64 = 600;
 
 /// How often a given destination may report a no-data worker passthrough.
 const NO_DATA_LOG_EVERY: Duration = Duration::from_secs(300);
+/// One WARN per failed passthrough host per interval; the rest at debug.
+const PASSTHROUGH_WARN_EVERY: Duration = Duration::from_secs(300);
+static PASSTHROUGH_WARNED: TtlMap<String> = TtlMap::new();
 /// Destinations that already reported one, keyed `ip:port`.
 static NO_DATA_LOGGED: crate::ttl_map::TtlMap<String> = crate::ttl_map::TtlMap::new();
 
@@ -709,6 +718,7 @@ pub async fn try_cf_fallback(
         .into_iter()
         .take(max_cf_proxy_attempts())
         .collect();
+    let window = cf_domains.len();
 
     if let Some(primary) = cf_domains.first() {
         log::debug!("[{label}] DC{} -> trying CF proxy {primary}", hs.dc);
@@ -764,6 +774,9 @@ pub async fn try_cf_fallback(
         }
     }
 
+    // Every candidate this session tried failed. Move the DC past them so the
+    // next session does not re-dial the same window.
+    advance_proxy_domains_for_dc(hs.dc, window);
     CfBridgeResult::Failed { client, ctx }
 }
 
@@ -805,6 +818,7 @@ async fn finish_cf_proxy_connect(
                     e.into_io()
                 );
             } else {
+                crate::stats::inc(crate::stats::Stat::CfProxyDialFailed);
                 log::warn!(
                     "[{label}] DC{dc} CF proxy {cf_domain_owned} failed: {}",
                     e.into_io()
@@ -813,6 +827,7 @@ async fn finish_cf_proxy_connect(
             None
         }
         Err(_) => {
+            crate::stats::inc(crate::stats::Stat::CfProxyDialFailed);
             log::warn!("[{label}] DC{dc} CF proxy {cf_domain_owned} timeout");
             None
         }
@@ -842,9 +857,19 @@ pub async fn try_tcp_fallback(
             continue;
         }
         let addr = format!("{dst}:443");
-        match timeout(Duration::from_secs(10), TcpStream::connect(&addr)).await {
+        // An IP already in ip_fail cooldown gets the short timeout: on an ISP
+        // that drops SYNs to every Telegram address this rung never succeeds,
+        // yet each exhausted session paid the full 10 s here before blind
+        // relay. The failure is recorded so the next session knows too.
+        let connect_timeout = if should_skip_direct_ws(&dst, dc) {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(10)
+        };
+        match timeout(connect_timeout, TcpStream::connect(&addr)).await {
             Err(_) | Ok(Err(_)) => {
-                log::warn!("[{label}] TCP fallback to {dst} failed");
+                mark_ip_failed(&dst, dc);
+                log::debug!("[{label}] TCP fallback to {dst} failed");
                 continue;
             }
             Ok(Ok(mut remote)) => {
@@ -1005,17 +1030,19 @@ async fn try_worker_passthrough(
     if orig_ip.is_empty() {
         return Err(client);
     }
+    // A disabled or unconfigured rung is a fact of the setup, not a fault of
+    // this connection; at WARN it was the single most frequent line in syslog.
     if cf_fallback_disabled() {
-        log::warn!("[{label}] worker passthrough skipped (WRTG_NO_CFPROXY)");
+        log::debug!("[{label}] worker passthrough skipped (WRTG_NO_CFPROXY)");
         return Err(client);
     }
     if worker_passthrough_disabled() {
-        log::warn!("[{label}] worker passthrough skipped (WRTG_NO_WORKER_PASSTHROUGH)");
+        log::debug!("[{label}] worker passthrough skipped (WRTG_NO_WORKER_PASSTHROUGH)");
         return Err(client);
     }
     let configured = worker_domains();
     if configured.is_empty() {
-        log::warn!("[{label}] worker passthrough skipped (no CF_WORKER_DOMAIN)");
+        log::debug!("[{label}] worker passthrough skipped (no CF_WORKER_DOMAIN)");
         return Err(client);
     }
     // Skip Workers that are serving 429s. Without this, every connection
@@ -1150,8 +1177,16 @@ pub async fn blind_relay(
             // rotates real diagnostics out of the router's syslog ring; the
             // fix for that client is WRTG_SKIP_SRC, not a log line.
             log::debug!("[{label}] passthrough failed host=\"\" (tried {tried:?})");
+        } else if PASSTHROUGH_WARNED.mark_if_absent(host.clone(), PASSTHROUGH_WARN_EVERY) {
+            // Bot API and Telegram Web clients retry a failed host every few
+            // seconds and never stop; one line per host per interval keeps
+            // the fact visible without rotating everything else out of syslog.
+            log::warn!(
+                "[{label}] passthrough failed host={host:?} (tried {tried:?}; repeats at debug for {}s)",
+                PASSTHROUGH_WARN_EVERY.as_secs()
+            );
         } else {
-            log::warn!("[{label}] passthrough failed host={host:?} (tried {tried:?})");
+            log::debug!("[{label}] passthrough failed host={host:?} (tried {tried:?})");
         }
         return;
     };
