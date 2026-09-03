@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 - 2026-09-04
+
+Two days of logs from four routers after 1.2.1, and what they said.
+
+### Changed
+- **The CF Proxy balancer walks the pool instead of re-dialling the same three domains.** A session tries at most three domains: the sticky one, then two from a per-DC cursor. Both the cursor and the sticky were reset on every hourly list refresh, so the first DC to connect afterwards started at index 0 — the head of the shared list — and stayed there for the hour whenever those three were having a bad minute. The same three names topped the failure counts on all four routers for that reason alone; probed directly they answered 101, and two *other* domains were the ones failing at that moment. The pool flickers on a minutes scale, which is also why the 0.5.37 cooldown lost. Now a refresh keeps the cursor and the sticky, and a window that fails outright moves the cursor past it, so consecutive sessions try different domains until one sticks. On the busiest router 2 523 DC2 sessions a day hit a failing domain first and 626 exhausted the window.
+- **CF dial timeout is 4 s, not 8.** A healthy dial, TLS plus WebSocket upgrade, takes 0.15–0.25 s from these routers. What ran into 8 s was a Worker waiting on a Telegram upstream that would not answer, and a session paid it twice, primary and race, before falling through: sessions with CF failures averaged 40 s on the router whose ISP behaves that way.
+- **TCP fallback trusts `ip_fail`.** On an ISP that drops SYNs to every Telegram address the rung never succeeds (`tcp_fallback 0` after 39 000 sessions), yet every exhausted session paid its 10 s connect timeout before blind relay. An IP already marked failed now gets 2 s, and a failed fallback marks the IP so the next session knows.
+- **`dc_learn` keeps the first observation.** The shared front 149.154.167.220 serves DC2 and DC4, media or not, so every client that disagreed with the last one flipped the entry and appended a line: 712 of the 745 lines in one router's learned file were that single address, and the DC handed to clients that omit it in the handshake changed with whoever connected last. The admin file still overrides.
+- **Quieter syslog.** `worker passthrough skipped (no CF_WORKER_DOMAIN)` and its two siblings were the most frequent line on two routers; a rung that is not configured is a fact of the setup, so they log at debug. `passthrough failed host=X` — Bot API and Telegram Web clients that retry forever behind a router without a Worker — warns once per host per five minutes and logs the rest at debug. `TCP fallback to X failed` is debug; `all bridge paths failed` already says it.
+
+### Added
+- **`cf_proxy_dial_failed`** in `--stats`, and a `cf proxy` section with the sticky domain per DC. The status page has a **CF Proxy** card showing mode, sessions, failed dials and the sticky domains, so a DC pinned on bad domains is visible without counting WARN lines.
+- **`heap` in `--stats`**: live bytes and allocation count by size class, from a counting wrapper over the system allocator. RSS on the aarch64 routers grows about 1.25 kB per accepted connection and never comes back while the x86 ones stay flat; RSS alone cannot tell a leak from musl keeping freed pages mapped, and this can.
+
 ## 1.2.1 - 2026-09-01
 
 ### Fixed
