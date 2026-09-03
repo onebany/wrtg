@@ -159,6 +159,7 @@ pub async fn snapshot() -> String {
             out.push_str(&format!("  DC{dc}{tag} {depth}\n"));
         }
     }
+    crate::heap::render(&mut out);
     out
 }
 

@@ -13,6 +13,7 @@ pub mod cooldown429;
 pub mod dc_learn;
 pub mod fronting;
 pub mod handshake;
+pub mod heap;
 pub mod https;
 pub mod ip_fail;
 pub mod logger;

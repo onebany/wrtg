@@ -23,6 +23,9 @@ use wrtg::watchdog::{bind_transparent, serve};
 use wrtg::ws_blacklist::mark_ws_blacklisted;
 use wrtg::ws_pool::{start_refill_task, warmup_pools};
 
+#[global_allocator]
+static GLOBAL: wrtg::heap::Counting = wrtg::heap::Counting;
+
 #[tokio::main]
 async fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
