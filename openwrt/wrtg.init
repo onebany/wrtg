@@ -16,6 +16,9 @@ start_service() {
 	}
 
 	/etc/wrtg/setup-nft.sh
+	# Cron lines (CIDR refresh, auto-update) follow the config; a router
+	# upgraded to a build that has them gets the schedule on first start.
+	/etc/wrtg/setup-cron.sh >/dev/null 2>&1 || true
 
 	procd_open_instance
 	procd_set_param command "$BIN" -listen "$LISTEN" -front-ip "$FRONT_IP"
@@ -101,6 +104,9 @@ reload_service() {
 	# block the SIGHUP: a typo in the exclusion list should not also stop a
 	# front-IP change from landing.
 	/etc/wrtg/setup-nft.sh || echo "wrtg: nft reload failed; daemon config still reloaded" >&2
+	# Same for the cron schedule, so an auto-update time saved in LuCI lands
+	# with "Save & Reload".
+	/etc/wrtg/setup-cron.sh >/dev/null 2>&1 || echo "wrtg: cron setup failed" >&2
 	# busybox pgrep matches the cmdline, so filter by comm to skip shells that
 	# merely mention the binary path (log monitors, this very script, etc.).
 	local name pid daemon=""

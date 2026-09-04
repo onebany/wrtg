@@ -182,3 +182,12 @@ CIDR_URL="https://core.telegram.org/resources/cidr.txt"
 
 # Daily CIDR refresh hour (0-23, router local time).
 CIDR_UPDATE_HOUR="4"
+
+# Unattended update: once a day check GitHub for a newer release and install
+# it the way the LuCI Update button does (checksum verified, config kept).
+# The service restarts during an update. Where the ISP blocks GitHub
+# downloads the run fails and the status page says so. "0" disables.
+WRTG_AUTO_UPDATE="1"
+
+# Time of the daily run, HH:MM, router local time.
+WRTG_AUTO_UPDATE_TIME="06:00"

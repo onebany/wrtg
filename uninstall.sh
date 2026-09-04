@@ -31,9 +31,9 @@ if [ -f "$CRON_FILE" ]; then
 	# Drop the update-cidr cron line. Prefer in-place sed; if that fails
 	# (e.g. no `sed -i` support), fall back to grep+mv. Kept as an explicit
 	# if/else so `set -e` can't abort the uninstall on the sed success path.
-	if sed -i '/wrtg\/update-cidr\.sh/d' "$CRON_FILE" 2>/dev/null; then
+	if sed -i -e '/wrtg\/update-cidr\.sh/d' -e '/wrtg\/auto-update\.sh/d' "$CRON_FILE" 2>/dev/null; then
 		:
-	elif grep -v 'wrtg/update-cidr.sh' "$CRON_FILE" > "${CRON_FILE}.tmp"; then
+	elif grep -v -e 'wrtg/update-cidr.sh' -e 'wrtg/auto-update.sh' "$CRON_FILE" > "${CRON_FILE}.tmp"; then
 		mv "${CRON_FILE}.tmp" "$CRON_FILE"
 	else
 		rm -f "${CRON_FILE}.tmp"

@@ -142,11 +142,21 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 		}
 	}
 	if (form == 'quick') {
+		// The time goes into a cron line; anything but HH:MM is refused here.
+		let t = http.formvalue('WRTG_AUTO_UPDATE_TIME');
+		if (t != null && !match(trim(t), /^([01][0-9]|2[0-3]):[0-5][0-9]$/)) {
+			msg = _('Not saved: time must be HH:MM: ') + t;
+			msg_ok = false;
+			form = null;
+		}
+	}
+	if (form == 'quick') {
 		let text = lf(readfile(cfg_path) ?? '');
 		for (let k in ['FRONT_IP', 'WRTG_FRONT_DCS', 'WRTG_DC_IPS', 'CF_WORKER_DOMAIN', 'WRTG_CF_WORKER_TOKEN',
 		               'CF_PROXY_DOMAIN', 'WRTG_CFPROXY_AUTO', 'WRTG_CFPROXY_MAX_ATTEMPTS',
 		               'WRTG_CFPROXY_DOMAINS_URL', 'WRTG_CFPROXY_REFRESH_SEC',
-		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS', 'WRTG_LANG', 'WRTG_SKIP_SRC']) {
+		               'WRTG_WS_POOL_SIZE', 'WRTG_MAX_CONNS', 'WRTG_LANG', 'WRTG_SKIP_SRC',
+		               'WRTG_AUTO_UPDATE_TIME']) {
 			let v = http.formvalue(k);
 			if (v == null) continue;
 			if (k == 'CF_WORKER_DOMAIN' || k == 'CF_PROXY_DOMAIN')
@@ -163,6 +173,8 @@ if (http.getenv('REQUEST_METHOD') == 'POST' && http.formvalue('token') == ctx.au
 			text = set_key(text, 'WRTG_CFPROXY_AUTO', http.formvalue('cb_cfproxy_auto') == '1' ? '1' : '0');
 		if (http.formvalue('_cb_verbose') == '1')
 			text = set_key(text, 'RUST_LOG', http.formvalue('cb_verbose') == '1' ? 'debug' : '');
+		if (http.formvalue('_cb_auto_update') == '1')
+			text = set_key(text, 'WRTG_AUTO_UPDATE', http.formvalue('cb_auto_update') == '1' ? '1' : '0');
 		writefile(cfg_path, text);
 		system('chmod 600 /etc/wrtg/config');
 		msg = _('Saved. Reload applies everything except LISTEN and pool sizes; those need a restart.');
@@ -423,6 +435,39 @@ let docs_url = dispatcher.build_url('admin', 'services', 'wrtg', 'docs');
 		<div class="cbi-page-actions">
 			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
 			<button class="cbi-button cbi-button-apply" type="submit" name="_restart" value="1">{{ _('Save & Restart') }}</button>
+		</div>
+	</form>
+</div>
+
+{%
+	let auto_on = cfg_val(cfg, 'WRTG_AUTO_UPDATE') != '0';
+	let auto_time = cfg_val(cfg, 'WRTG_AUTO_UPDATE_TIME') || '06:00';
+	let auto_last = { date: '', result: '', detail: '' };
+	for (let line in split(readfile('/etc/wrtg/auto-update.last') ?? '', /\n/)) {
+		let m = match(line, /^(DATE|RESULT|DETAIL)=(.*)$/);
+		if (m) auto_last[lc(m[1])] = trim(m[2]);
+	}
+%}
+<div class="cbi-card wrtg-card">
+	<h3>{{ _('Auto-update') }}</h3>
+	<p class="hint">{{ _('Once a day wrtg checks GitHub for a newer release and installs it the way the Update button does: checksum verified, config kept, service restarted. Where the ISP blocks GitHub downloads the run fails and is reported here.') }}</p>
+	<form method="post" action="{{ url }}">
+		<input type="hidden" name="token" value="{{ ctx.authtoken }}" />
+		<input type="hidden" name="_form" value="quick" />
+		<div class="wrtg-row">
+			<label><input type="hidden" name="_cb_auto_update" value="1" /><input type="checkbox" name="cb_auto_update" value="1" {{ auto_on ? 'checked' : '' }} /> {{ _('Update automatically') }}</label>
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Time (router local)') }}</label>
+			<input type="time" name="WRTG_AUTO_UPDATE_TIME" value="{{ auto_time }}" style="width:8em" />
+		</div>
+		<div class="wrtg-row">
+			<label class="k">{{ _('Last run') }}</label>
+			<span>{{ length(auto_last.date) ? auto_last.date + ' · ' + auto_last.result + (length(auto_last.detail) ? ' · ' + auto_last.detail : '') : _('never') }}</span>
+		</div>
+		<div class="cbi-page-actions">
+			<input class="cbi-button cbi-button-save" type="submit" value="{{ _('Save') }}" />
+			<button class="cbi-button cbi-button-apply" type="submit" name="_reload" value="1">{{ _('Save & Reload') }}</button>
 		</div>
 	</form>
 </div>

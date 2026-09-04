@@ -53,6 +53,8 @@ load_config() {
 	WRTG_SKIP_SRC=""
 	CIDR_URL="https://core.telegram.org/resources/cidr.txt"
 	CIDR_UPDATE_HOUR="4"
+	WRTG_AUTO_UPDATE="1"
+	WRTG_AUTO_UPDATE_TIME="06:00"
 
 	if [ -f "$CONFIG" ]; then
 		# Source a CR-stripped copy, not the file itself. A config saved from a

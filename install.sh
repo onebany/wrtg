@@ -201,7 +201,7 @@ install_files() {
 	mkdir -p "$ETC" /usr/sbin /var/lib/wrtg
 	# mv-into-place: overwriting a running binary directly fails with ETXTBSY.
 	install_file 755 "$1" /usr/sbin/wrtg.new && mv /usr/sbin/wrtg.new /usr/sbin/wrtg
-	for f in lib.sh setup-nft.sh update-cidr.sh check-update.sh; do
+	for f in lib.sh setup-nft.sh setup-cron.sh update-cidr.sh check-update.sh auto-update.sh; do
 		install_file 755 "$PKG_DIR/$f" "$ETC/$f"
 	done
 	install_file 644 "$PKG_DIR/cidr-extra.txt" "$ETC/cidr-extra.txt"
@@ -228,9 +228,7 @@ install_files() {
 
 	# shellcheck disable=SC1090
 	. "$ETC/lib.sh"; load_config
-	CRON_FILE="/etc/crontabs/root"; mkdir -p "$(dirname "$CRON_FILE")"; touch "$CRON_FILE"
-	grep -qF "$ETC/update-cidr.sh" "$CRON_FILE" 2>/dev/null || \
-		echo "0 ${CIDR_UPDATE_HOUR:-4} * * * $ETC/update-cidr.sh >/dev/null 2>&1" >> "$CRON_FILE"
+	"$ETC/setup-cron.sh" >/dev/null 2>&1 || warn "cron setup failed (CIDR refresh / auto-update not scheduled)"
 
 	step "Fetching Telegram CIDR + loading nftables..."
 	"$ETC/update-cidr.sh" >/dev/null 2>&1 || warn "CIDR fetch failed; using built-in defaults"
@@ -306,7 +304,7 @@ install_remote() {
 		step "Uploading daemon to $ROUTER..."
 		ssh "$ROUTER" "mkdir -p $ETC /var/lib/wrtg"
 		scp -qO "$BIN" "$ROUTER:/usr/sbin/wrtg.new"
-		for f in lib.sh setup-nft.sh update-cidr.sh check-update.sh cidr-extra.txt cf-worker.js; do
+		for f in lib.sh setup-nft.sh setup-cron.sh update-cidr.sh check-update.sh auto-update.sh cidr-extra.txt cf-worker.js; do
 			scp -qO "$PKG_DIR/$f" "$ROUTER:$ETC/$f"
 		done
 		# Seed dc-ips.txt only when missing (don't clobber admin edits).
@@ -334,8 +332,7 @@ else
 fi
 [ -f "$ETC/dc-ips-learned.txt" ] || touch "$ETC/dc-ips-learned.txt"
 . "$ETC/lib.sh"; load_config
-CRON=/etc/crontabs/root; mkdir -p "$(dirname "$CRON")"; touch "$CRON"
-grep -qF "$ETC/update-cidr.sh" "$CRON" 2>/dev/null || echo "0 ${CIDR_UPDATE_HOUR:-4} * * * $ETC/update-cidr.sh >/dev/null 2>&1" >> "$CRON"
+"$ETC/setup-cron.sh" >/dev/null 2>&1 || true
 "$ETC/update-cidr.sh" >/dev/null 2>&1 || true
 if [ "$NO_START" != "1" ]; then
 	"$INITD" enable

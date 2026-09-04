@@ -84,6 +84,13 @@ let cidr_n = int(sh("nft list set inet tg_tproxy telegram_cidr 2>/dev/null | gre
 // Hosts excluded from the intercept (WRTG_SKIP_SRC)
 let skip_src = filter(split(cfg_val(cfg, 'WRTG_SKIP_SRC'), /[ \t,]+/), function(s) { return length(s) > 0; });
 
+// Auto-update schedule and the last unattended run (auto-update.sh).
+let auto_on = cfg_val(cfg, 'WRTG_AUTO_UPDATE') != '0';
+let auto_time = cfg_val(cfg, 'WRTG_AUTO_UPDATE_TIME') || '06:00';
+let auto_raw = readfile('/etc/wrtg/auto-update.last') ?? '';
+let auto_date = kv_line(auto_raw, 'DATE');
+let auto_result = kv_line(auto_raw, 'RESULT');
+
 // CF Proxy: mode from the config, health from the daemon's own snapshot.
 // Without this the only way to see that a DC was pinned on three flaky
 // domains for an hour was to count WARN lines in syslog.
@@ -184,6 +191,7 @@ function badge(ok, yes, no) {
 		<h4>{{ _('Updates') }}</h4>
 		<div class="wrtg-kv"><b>{{ _('Installed') }}</b> {{ length(upd_current) ? upd_current : (length(version) ? version : '?') }}</div>
 		<div class="wrtg-kv"><b>{{ _('Latest') }}</b> {{ length(upd_latest) ? upd_latest : _('— check first') }}</div>
+		<div class="wrtg-kv"><b>{{ _('Auto-update') }}</b> {{ auto_on ? _('daily at') + ' ' + auto_time : _('off') }}{{ length(auto_date) ? ' · ' + _('last run') + ' ' + auto_date + ': ' + auto_result : '' }}</div>
 		<div class="wrtg-kv"><b>{{ _('Status') }}</b>
 			{% if (upd_avail) { %}<span class="y">{{ _('update available') }}</span>
 			{% } else if (upd_status == 'up_to_date') { %}<span class="g">{{ _('up to date') }}</span>
