@@ -116,9 +116,12 @@ let worker = readfile(workerpath) ?? '';
 			if(/^\s*[-*]\s+/.test(l)){ var items=[];
 				while(i<lines.length && /^\s*[-*]\s+/.test(lines[i])){ items.push('<li>'+inline(lines[i].replace(/^\s*[-*]\s+/,''))+'</li>'); i++; }
 				out.push('<ul>'+items.join('')+'</ul>'); continue; }
+			if(/^\s*\d+[.)]\s+/.test(l)){ var oitems=[];
+				while(i<lines.length && /^\s*\d+[.)]\s+/.test(lines[i])){ oitems.push('<li>'+inline(lines[i].replace(/^\s*\d+[.)]\s+/,''))+'</li>'); i++; }
+				out.push('<ol>'+oitems.join('')+'</ol>'); continue; }
 			if(/^\s*$/.test(l)){ i++; continue; }
 			var para=[l]; i++;
-			while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^\s*(#{1,3}\s|```|[-*]\s|\|)/.test(lines[i]) && !/^\s*---+\s*$/.test(lines[i])){ para.push(lines[i]); i++; }
+			while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^\s*(#{1,3}\s|```|[-*]\s|\d+[.)]\s|\|)/.test(lines[i]) && !/^\s*---+\s*$/.test(lines[i])){ para.push(lines[i]); i++; }
 			out.push('<p>'+inline(para.join(' '))+'</p>');
 		}
 		host.innerHTML=out.join('\n');

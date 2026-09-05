@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **README rewritten against the code and cut from 531 to 300 lines.** Every variable the daemon reads is in the tables with its real default; `WRTG_SESSION_IDLE_SEC`, the Worker 429 cooldowns, the pool list URL and refresh interval were missing, `WRTG_LANG` sat under CF Proxy tuning. Gone: the "4 MB RAM" figure no router matches, the log strings that only exist at debug level, the mermaid diagrams, the module table and the glossary. The Worker setup ends in `restart` because the token is read at start; a proxy domain applies on `reload`.
+- The LuCI documentation page renders numbered lists as lists; before, the steps of the Worker setup and the fallback chain came out as one paragraph.
+
 ## 1.3.1 - 2026-09-05
 
 ### Fixed
