@@ -89,13 +89,20 @@ async fn main() {
 
     apply_config(&cfg);
 
+    // Seed the shared pool before `--check` gets to look: the check probes
+    // DC1/3/5 through the first CF proxy, and without the seed it reported
+    // "none configured" on every stock install while the daemon next to it
+    // was relaying through twenty domains.
+    if cfproxy_auto_enabled() {
+        seed_default_cfproxy_domains();
+    }
+
     if check_mode {
         std::process::exit(wrtg::check::run_check(&cfg).await);
     }
     wrtg::dc_learn::load();
 
     if cfproxy_auto_enabled() {
-        seed_default_cfproxy_domains();
         start_cfproxy_refresh_task();
     }
 

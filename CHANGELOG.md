@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1 - 2026-09-05
+
+### Fixed
+- **`wrtg --check` did not know about the shared CF Proxy pool.** The check ran before the pool was seeded, so on every stock install it printed "Cloudflare Worker / Proxy: none configured" and "DC1/3/5 will fail" while the daemon next to it was relaying through twenty domains; the LuCI *Run check* button said the same. The pool is seeded first now. Two more things had to change for that to be useful: the DNS step resolves a proxy through its `kws2.` host, because the pool's base domains have no A record and would have produced twenty red lines, and the DC1/3/5 probe gets the same budget a live session has — up to three domains, first answer wins — instead of judging the router by whichever flaky domain sits at the head of the list. The probe also dialled the base domain instead of the per-DC host, the bug 0.5.35 fixed everywhere else.
+
 ## 1.3.0 - 2026-09-04
 
 Two days of logs from four routers after 1.2.1, and what they said.

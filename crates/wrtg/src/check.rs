@@ -86,8 +86,10 @@ async fn probe_cf_worker(worker: &str, dst_ip: &str, dc: i32) -> Result<(), Stri
         })
 }
 
-async fn probe_cf_proxy(cf_domain: &str, ws_host: &str) -> Result<(), String> {
-    connect_ws_with_headers(cf_domain, ws_host, "/apiws", PROBE_TIMEOUT, &[])
+async fn probe_cf_proxy(ws_host: &str) -> Result<(), String> {
+    // Dial the per-DC host itself: shared-pool base domains have no A record,
+    // only `kws{N}.<domain>` is proxied (the 0.5.35 lesson, see cf_proxy.rs).
+    connect_ws_with_headers(ws_host, ws_host, "/apiws", PROBE_TIMEOUT, &[])
         .await
         .map(|_| ())
         .map_err(|e| match e {
@@ -118,11 +120,25 @@ pub async fn run_check(cfg: &WrtgConfig) -> i32 {
         cfg.cf_proxy_domains.clone()
     };
 
-    // Resolve each configured Worker / Proxy domain once.
-    if !workers.is_empty() || !proxies.is_empty() {
+    // Resolve each configured Worker / Proxy domain once. Shared-pool base
+    // domains carry no A record — only the per-DC hosts are proxied — so a
+    // proxy is resolved through its `kws2.` host, and a twenty-domain pool is
+    // sampled rather than walked.
+    let proxy_dns: Vec<String> = proxies
+        .iter()
+        .take(3)
+        .map(|d| cf_proxy_ws_domain(d, 2, false))
+        .collect();
+    if !workers.is_empty() || !proxy_dns.is_empty() {
         eprintln!("\nDNS resolution (Worker / Proxy domains):");
-        for d in workers.iter().chain(proxies.iter()) {
+        for d in workers.iter().chain(proxy_dns.iter()) {
             probes.push(probe_dns(d).await);
+        }
+        if proxies.len() > proxy_dns.len() {
+            eprintln!(
+                "  ({} more proxy domains in the pool, not resolved here)",
+                proxies.len() - proxy_dns.len()
+            );
         }
     } else {
         eprintln!("\nCloudflare Worker / Proxy: none configured");
@@ -145,10 +161,24 @@ pub async fn run_check(cfg: &WrtgConfig) -> i32 {
             let dst = dc_default_ip(dc).unwrap_or("").to_string();
             let label = format!("DC{dc} worker {worker} -> {dst}");
             probes.push(probe_wss(&label, probe_cf_worker(worker, &dst, dc)).await);
-        } else if let Some(cf_domain) = proxies.first() {
-            let ws_host = cf_proxy_ws_domain(cf_domain, dc, false);
-            let label = format!("DC{dc} proxy {ws_host}");
-            probes.push(probe_wss(&label, probe_cf_proxy(cf_domain, &ws_host)).await);
+        } else if !proxies.is_empty() {
+            // Same budget as a live session: up to three pool domains, the
+            // first that answers wins. One flaky domain at the head of the
+            // shared list is not a failed router.
+            let mut last = None;
+            for cf_domain in proxies.iter().take(3) {
+                let ws_host = cf_proxy_ws_domain(cf_domain, dc, false);
+                let label = format!("DC{dc} proxy {ws_host}");
+                let p = probe_wss(&label, probe_cf_proxy(&ws_host)).await;
+                let ok = p.ok;
+                last = Some(p);
+                if ok {
+                    break;
+                }
+            }
+            if let Some(p) = last {
+                probes.push(p);
+            }
         } else {
             eprintln!("  DC{dc}: no worker/proxy — direct-blocked DC will fail on this network");
         }
