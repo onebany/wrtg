@@ -160,8 +160,8 @@ FRONT_IP="149.154.167.220"
 # ClientHellos meant to die in transit, but wrtg terminates TCP one hop away, so
 # the decoys arrive as real payload, get relayed to Telegram, and are never
 # answered — the client then retries every few seconds forever. Watch for it as
-# `blind_relay` far above `cf_proxy` in `wrtg --stats`, a climbing
-# `passthrough_no_data`, or `passthrough failed host=""` in the log. Excluded
+# `blind_relay` far above `cf_proxy` in `wrtg --stats` (and, with RUST_LOG=debug,
+# a stream of `passthrough failed host=""` lines). Excluded
 # hosts reach Telegram directly and keep their own bypass. Applied on
 # `/etc/init.d/wrtg reload` (the nft table is rebuilt without dropping
 # sessions). Editable in LuCI: Settings → Intercept.
