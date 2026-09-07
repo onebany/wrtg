@@ -155,11 +155,17 @@ fn parse_sni_extension(data: &[u8]) -> Option<String> {
 
 /// Raw `Host:` header value exactly as sent on the wire, including any `:port`
 /// and IP-literal hosts. The single HTTP-Host scanner shared by the extractors.
+///
+/// Lowercasing is ASCII-only (byte-wise) so that byte offsets found in the
+/// lowered copy stay valid for indexing into the original buffer. Full-Unicode
+/// `to_lowercase()` changes byte lengths for some codepoints (e.g. U+0130 "İ"
+/// → "i̇", 2→3 bytes), desyncing the offset and causing a panic or a silently
+/// corrupted Host value from arbitrary pre-crypto client bytes.
 pub fn http_host_raw(data: &[u8]) -> Option<String> {
     const MAX: usize = 4096;
     let data = if data.len() > MAX { &data[..MAX] } else { data };
-    let lower = String::from_utf8_lossy(data).to_lowercase();
-    let i = lower.find("\r\nhost:")?;
+    let lower: Vec<u8> = data.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let i = lower.windows(7).position(|w| w == b"\r\nhost:")?;
     let rest = &data[i + 7..];
     let mut j = 0usize;
     while j < rest.len() && (rest[j] == b' ' || rest[j] == b'\t') {
@@ -335,5 +341,17 @@ mod tests {
         assert!(is_cdn_telegram_host("cdn2.telegram.org"));
         assert!(is_cdn_telegram_host("telesco.pe"));
         assert!(!is_cdn_telegram_host("kws1.web.telegram.org"));
+    }
+
+    #[test]
+    fn http_host_raw_non_ascii_before_host() {
+        // U+0130 "İ" is 2 bytes in UTF-8 (C4 B0) but lowercases to "i̇"
+        // (3 bytes: 69 CC 87). Ten of them before the Host header expand the
+        // lowercased copy by 10 bytes, so the byte offset found there is 10
+        // past its true position in the original buffer — indexing
+        // data[i+7..] then runs off the end of the slice and panics.
+        let req = "İİİİİİİİİİ\r\nHost: a.b\r\n\r\n";
+        let host = http_host_raw(req.as_bytes());
+        assert_eq!(host.as_deref(), Some("a.b"));
     }
 }
